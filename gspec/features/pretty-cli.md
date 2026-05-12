@@ -47,22 +47,22 @@ implementation-order: 1
 
 ## 4. Capabilities
 
-- [ ] **P0**: A single shared theme defines the CLI's colors, spacing, and role-based accents (success, warning, error, info, muted, heading, body), and is the only source of styling values used by other CLI features.
+- [x] **P0**: A single shared theme defines the CLI's colors, spacing, and role-based accents (success, warning, error, info, muted, heading, body), and is the only source of styling values used by other CLI features.
   - All styled output across the CLI references theme tokens — no ad-hoc color literals appear in feature code.
   - Changing a theme value in one place changes it everywhere it is used.
   - The theme exposes at minimum: heading, body, muted, success, warning, error, info.
 
-- [ ] **P0**: Styled text helpers render text in each themed role (heading, body, muted, success, warning, error, info) with consistent color and emphasis.
+- [x] **P0**: Styled text helpers render text in each themed role (heading, body, muted, success, warning, error, info) with consistent color and emphasis.
   - Each helper produces output styled per the theme when on a TTY.
   - Helpers compose with surrounding text without leaking styling onto adjacent output.
   - Empty or whitespace-only input is handled without throwing.
 
-- [ ] **P0**: Output automatically degrades to plain, unstyled text when the destination is not an interactive terminal (pipe, redirect, CI log, non-TTY).
+- [x] **P0**: Output automatically degrades to plain, unstyled text when the destination is not an interactive terminal (pipe, redirect, CI log, non-TTY).
   - When stdout is not a TTY, output contains no ANSI escape sequences.
   - The same content remains readable and faithfully represents the structure that would be visible on a TTY (e.g., headings still stand out via text, panels still convey grouping).
   - Detection happens automatically on each invocation; the user does not need to pass a flag for the common case.
 
-- [ ] **P0**: The CLI respects the `NO_COLOR` environment variable and provides an explicit override to force color on or off.
+- [x] **P0**: The CLI respects the `NO_COLOR` environment variable and provides an explicit override to force color on or off.
   - When `NO_COLOR` is set (to any non-empty value), no ANSI color codes are emitted regardless of TTY state.
   - An explicit override (e.g., a `--color` flag or equivalent env var documented in the spec) can force colored output on or off, taking precedence over auto-detection.
   - Behavior is documented in the CLI's help output.
