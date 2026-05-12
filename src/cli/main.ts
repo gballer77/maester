@@ -3,6 +3,7 @@ import { detectRoles } from "../core/config/paths.js";
 import { MaesterError } from "../core/errors.js";
 import { PromptCancelledError } from "../ui/prompts.js";
 import { registerInit, runInit } from "./commands/init.js";
+import { registerPublish, runPublish } from "./commands/publish.js";
 import { type CliContext, type GlobalFlags, buildContext } from "./context.js";
 import { showTopLevelMenu } from "./menu.js";
 
@@ -53,6 +54,7 @@ function buildProgram(): Command {
     .allowExcessArguments(false);
 
   registerInit(program, () => buildContext(extractFlags(program.opts())));
+  registerPublish(program, () => buildContext(extractFlags(program.opts())));
 
   program.action(async () => {
     const ctx = buildContext(extractFlags(program.opts()));
@@ -102,8 +104,7 @@ async function runNoArgs(ctx: CliContext): Promise<number> {
       case "init":
         return runInit(ctx);
       case "publish":
-        ctx.prompts.outro("`maester publish` is implemented in a later phase — coming soon.");
-        return 0;
+        return runPublish(ctx);
       case "status":
         return runStatus(ctx);
       case "exit":

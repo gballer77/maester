@@ -56,57 +56,57 @@ implementation-order: 3
 
 ## 4. Capabilities
 
-- [ ] **P0**: User can reach the "Configure this repo as a maester" flow from the `npx maester` top-level menu
+- [x] **P0**: User can reach the "Configure this repo as a maester" flow from the `npx maester` top-level menu
   - The top-level menu offers maester configuration as a clearly labeled option
   - Selecting it from a repo with no existing maester config opens the configuration walkthrough
   - The flow is reachable without any prior global install (still invokable via `npx`)
 
-- [ ] **P0**: User can declare one or more published documents during the walkthrough
+- [x] **P0**: User can declare one or more published documents during the walkthrough
   - For each entry the walkthrough collects a path (file or glob, repo-relative)
   - The user can add another entry or finish at any step
   - At least one entry is required to complete configuration; an empty manifest is rejected
   - The walkthrough's prompts and confirmations render through the shared CLI styling layer
 
-- [ ] **P0**: User can attach optional metadata to each published entry
+- [x] **P0**: User can attach optional metadata to each published entry
   - Optional fields per entry: description (short free-text), category (short identifier), tags (zero or more short identifiers)
   - Any combination of optional fields may be omitted on a given entry
   - The walkthrough makes clear which fields are optional vs required
 
-- [ ] **P0**: Configuration writes a maester manifest file at the repository root
+- [x] **P0**: Configuration writes a maester manifest file at the repository root
   - The file is created at a single, predictable repo-root path
   - The file is human-readable and safe to commit
   - The file contains a schema/version marker so future tooling can migrate it
   - The schema is consumable by [Maester Sync](maester-sync.md) without further translation
 
-- [ ] **P0**: Configuration installs no scripts and writes no executable artifacts
+- [x] **P0**: Configuration installs no scripts and writes no executable artifacts
   - The flow produces exactly one new file (the maester manifest); no script files, package.json edits, or hook installations occur
   - Any future "publish lint" or related capability is out of scope here
 
-- [ ] **P0**: Paths are validated for shape before being accepted
+- [x] **P0**: Paths are validated for shape before being accepted
   - Paths must be repo-relative; leading slashes and `..` segments are rejected with a clear message
   - Empty paths and whitespace-only paths are rejected
   - Path-shape validation is local only; no file-system existence check is required at this priority
 
-- [ ] **P1**: Re-running the maester configuration flow in a configured repo is safe
+- [x] **P1**: Re-running the maester configuration flow in a configured repo is safe
   - Existing manifest is detected and never silently overwritten
   - User is shown a summary of the current manifest (entry count, paths) and offered safe options (view config path, exit)
   - The walkthrough never deletes or truncates the existing manifest without explicit confirmation
 
-- [ ] **P1**: Walkthrough warns when a declared path does not resolve in the working tree
+- [x] **P1**: Walkthrough warns when a declared path does not resolve in the working tree
   - For non-glob entries, the walkthrough checks whether the file exists at config time and surfaces a soft warning when it does not
   - For glob entries, the walkthrough optionally previews how many files currently match
   - Warnings never block the user from saving — a maester may legitimately publish a future path
 
-- [ ] **P1**: Maester configuration coexists with citadel configuration in the same repo
+- [x] **P1**: Maester configuration coexists with citadel configuration in the same repo
   - The maester manifest file and the citadel configuration file have distinct, non-overlapping names
   - Either file can exist independently; both files can exist together without conflict
   - Configuring one role never touches or modifies the other role's file
 
-- [ ] **P1**: User receives clear next-step guidance at the end of configuration
+- [x] **P1**: User receives clear next-step guidance at the end of configuration
   - Final stdout (styled via the shared CLI layer) reports: where the manifest was written, how many entries it contains, and a reminder that consuming citadels will pick up the manifest at their next sync
   - Exit code is zero on success and non-zero on user cancellation or error
 
-- [ ] **P2**: Walkthrough offers lightweight suggestions for common publish patterns
+- [x] **P2**: Walkthrough offers lightweight suggestions for common publish patterns
   - When the repo root contains a `README.md`, the walkthrough offers it as a one-click default entry
   - Suggestions are additive; the user can always decline and enter paths manually
   - No suggestion is ever added without explicit user confirmation
