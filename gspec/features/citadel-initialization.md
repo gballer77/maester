@@ -53,54 +53,54 @@ implementation-order: 2
 
 ## 4. Capabilities
 
-- [ ] **P0**: User can reach the "Initialize a citadel" flow from the `npx maester` top-level menu
+- [x] **P0**: User can reach the "Initialize a citadel" flow from the `npx maester` top-level menu
   - The top-level menu offers citadel initialization as a clearly labeled option
   - Command is invokable via `npx maester` without prior global install
   - Selecting it from a repo with no existing citadel config opens the initialization walkthrough
   - User who declines exits cleanly without writing any files
   - User who accepts proceeds into the maester-registration steps
 
-- [ ] **P0**: User can register one or more maesters during the walkthrough
+- [x] **P0**: User can register one or more maesters during the walkthrough
   - Walkthrough collects, per maester: a short unique name, a git URL, and a ref (with a clear default for "use the remote's default branch")
   - User can add another maester or finish at any registration step
   - At least one maester is required to complete init; user cannot save an empty maester list
   - Duplicate maester names are rejected with a clear message before continuing
 
-- [ ] **P0**: User can attach an auth reference to a private maester via an environment-variable name
+- [x] **P0**: User can attach an auth reference to a private maester via an environment-variable name
   - Per-maester auth defaults to "none" (public repo)
   - When the user chooses token auth, the walkthrough prompts only for the env-var name (e.g. `MAESTER_DOCS_TOKEN`), never the secret value
   - The env-var name is recorded in the config; no secret is ever written to disk by the walkthrough
 
-- [ ] **P0**: User can optionally override the default copy destination for a maester
+- [x] **P0**: User can optionally override the default copy destination for a maester
   - Default destination is a per-maester subdirectory under a top-level `citadel/` folder at the repository root
   - User can enter a custom relative path during registration
   - Custom paths are normalized (no leading slash, no `..`) and validated as repo-relative
 
-- [ ] **P0**: Init writes a citadel configuration file at the repository root
+- [x] **P0**: Init writes a citadel configuration file at the repository root
   - File is created at a single, predictable path at the repo root
   - File is human-readable and safe to commit (contains no secret values)
   - File contains a schema/version marker so future tooling can migrate it
 
-- [ ] **P0**: Init scaffolds a runnable sync script in the repository
+- [x] **P0**: Init scaffolds a runnable sync script in the repository
   - After init, the user has a clearly documented way to invoke maester-sync locally (e.g. via a scaffolded script file, an npm script entry, or both)
   - The scaffolded sync entrypoint executes against the citadel config produced by init
   - The scaffolding is documented in stdout at the end of the walkthrough so the user knows exactly how to run it
 
-- [ ] **P1**: Re-running `npx maester` on a repo that already has a citadel is safe
+- [x] **P1**: Re-running `npx maester` on a repo that already has a citadel is safe
   - When the user selects "Initialize a citadel" in a repo that already has one, the existing config is detected and never silently overwritten
   - User is shown the current citadel summary (maester count, names) and offered safe options (view config path, exit)
   - Re-running in a configured repo never deletes, truncates, or replaces the existing config without explicit confirmation
 
-- [ ] **P1**: Init updates `.gitignore` for paths that should not be committed
+- [x] **P1**: Init updates `.gitignore` for paths that should not be committed
   - Any local clone-cache or temporary directory the sync script uses is added to `.gitignore` if not already present
   - The committed citadel config file itself is NOT added to `.gitignore`
   - Existing `.gitignore` entries are preserved; only missing lines are appended
 
-- [ ] **P1**: User receives clear next-step guidance at the end of init
+- [x] **P1**: User receives clear next-step guidance at the end of init
   - Final stdout includes: where the config was written, how to run the sync, and a reminder to set any env-var tokens referenced in the config
   - Exit code is zero on success and non-zero on user cancellation or error
 
-- [ ] **P2**: Init validates basic shape of each entered URL
+- [x] **P2**: Init validates basic shape of each entered URL
   - Obvious invalid inputs (empty, missing scheme, contains whitespace) are rejected before the user moves on
   - URL format is checked locally only — no network call is made
 
