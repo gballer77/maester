@@ -67,17 +67,17 @@ implementation-order: 1
   - An explicit override (e.g., a `--color` flag or equivalent env var documented in the spec) can force colored output on or off, taking precedence over auto-detection.
   - Behavior is documented in the CLI's help output.
 
-- [ ] **P1**: A panel/box primitive renders bordered, padded containers for grouping related output (summaries, status blocks, callouts).
+- [x] **P1**: A panel/box primitive renders bordered, padded containers for grouping related output (summaries, status blocks, callouts).
   - Panels render with a visible border and consistent internal padding on a TTY.
   - Panel content wraps to the panel's interior width without overflowing the terminal.
   - In non-TTY output, the panel still visually groups its content (e.g., via blank lines or a simple delimiter) instead of disappearing entirely.
 
-- [ ] **P1**: Output adapts to the current terminal width — long lines wrap or truncate cleanly, and layout primitives never exceed the terminal width.
+- [x] **P1**: Output adapts to the current terminal width — long lines wrap or truncate cleanly, and layout primitives never exceed the terminal width.
   - When the terminal width is known, multi-line content wraps at word boundaries within that width.
   - When width is unavailable (e.g., non-TTY), a sensible default width is used and content is not truncated mid-word.
   - Resizing the terminal between commands picks up the new width on the next invocation.
 
-- [ ] **P1**: A small set of layout helpers (vertical stack with consistent spacing, horizontal key/value rendering, indented blocks) lets other CLI features compose multi-element output without managing spacing manually.
+- [x] **P1**: A small set of layout helpers (vertical stack with consistent spacing, horizontal key/value rendering, indented blocks) lets other CLI features compose multi-element output without managing spacing manually.
   - Stacked elements have predictable, theme-defined spacing between them.
   - Key/value pairs align consistently within a single rendering.
   - Indented blocks indent every line of their content, including wrapped lines.
