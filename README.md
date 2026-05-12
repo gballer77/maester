@@ -2,13 +2,42 @@
 
 > Aggregate documentation from many sources into one central knowledge home for developers and AI agents.
 
+[![CI](https://github.com/baller-software/maester/actions/workflows/ci.yml/badge.svg)](https://github.com/baller-software/maester/actions/workflows/ci.yml)
+
 Maester is a Node CLI and helper library for teams whose knowledge is spread across multiple sources — Git repositories today, with hosted document tools and web sources planned next. Each source (a **maester**) declares its relevant docs, and a **citadel** gathers them into a structured knowledge base that is easier to read, update, and reason over.
+
+## Two roles, two files
+
+Maester defines two repository roles, each declared by a single committed YAML file at the repo root:
+
+| Role     | File           | Created by         |
+|----------|----------------|--------------------|
+| citadel  | `citadel.yaml` | `maester init`     |
+| maester  | `maester.yaml` | `maester publish`  |
+
+A repo can be one role, the other, or both. There is at most one of each per repo.
+
+## Quickstart
+
+In the repository you want to populate with aggregated knowledge:
+
+```sh
+npx maester              # interactive menu
+npx maester init         # citadel walkthrough
+npx maester sync         # fetch all configured sources
+```
+
+In a repository that *publishes* docs to other citadels:
+
+```sh
+npx maester publish      # maester manifest walkthrough
+```
 
 ## Prerequisites
 
 - **Node.js** ≥ 24 LTS
-- **pnpm** 9.x or later (development)
-- **git** ≥ 2.27 (for partial-clone optimizations; older versions fall back automatically)
+- **git** ≥ 2.27 (older versions fall back automatically to `--depth=1` clones)
+- **pnpm** 9.x for development (consumers can use any package manager)
 
 ## Local Development Setup
 
@@ -54,6 +83,7 @@ Maester reads tokens only at runtime; nothing secret is ever written to disk. Pe
 | `FORCE_COLOR` | Force color (`0`–`3`). Standard. |
 | `MAESTER_THEME` | `light` or `dark` to override automatic detection. |
 | `MAESTER_NO_MOTION` | Replace spinners with static elapsed counters. |
+| `MAESTER_NO_WELCOME` | Suppress the first-run welcome banner. |
 
 ## Project Structure
 
@@ -66,6 +96,10 @@ src/
 test/           Vitest unit + e2e tests
 gspec/          Living specifications
 ```
+
+## Specifications
+
+This project is built from a living specification under `gspec/`. The product profile, technology stack, visual style guide, development practices, technical architecture, and per-feature PRDs all live there. Changes to behavior should update the relevant spec; see `CLAUDE.md` for the contract.
 
 ## License
 
