@@ -1,7 +1,10 @@
 import { Command, type OptionValues } from "commander";
 import { detectRoles } from "../core/config/paths.js";
 import { MaesterError } from "../core/errors.js";
+import { bannerForContext } from "../ui/components/banner.js";
 import { PromptCancelledError } from "../ui/prompts.js";
+import { createTheming } from "../ui/theme/index.js";
+import { readColumns } from "../ui/width.js";
 import { registerInit, runInit } from "./commands/init.js";
 import { registerPublish, runPublish } from "./commands/publish.js";
 import { registerSync } from "./commands/sync.js";
@@ -14,6 +17,7 @@ export async function run(argv: readonly string[] = process.argv): Promise<void>
 }
 
 export async function runMain(argv: readonly string[] = process.argv): Promise<number> {
+  maybeRenderHelpVersionBanner(argv);
   const program = buildProgram();
   try {
     await program.parseAsync(argv as string[]);
@@ -26,6 +30,20 @@ export async function runMain(argv: readonly string[] = process.argv): Promise<n
     }
     process.stderr.write(`${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
     return 1;
+  }
+}
+
+function maybeRenderHelpVersionBanner(argv: readonly string[]): void {
+  if (!process.stdout.isTTY) return;
+  const tail = argv.slice(2);
+  const wantsHelp = tail.includes("--help") || tail.includes("-h");
+  const wantsVersion = tail.includes("--version") || tail.includes("-V");
+  if (!wantsHelp && !wantsVersion) return;
+  const theming = createTheming();
+  const subtitle = wantsVersion ? "v0.1.0 · living specs" : "living specs · v0.1.0";
+  const banner = bannerForContext(theming, readColumns(), subtitle);
+  if (banner.length > 0) {
+    process.stdout.write(`${banner}\n\n`);
   }
 }
 
@@ -75,13 +93,15 @@ function extractFlags(opts: OptionValues): GlobalFlags {
     typeof opts.theme === "string" && (opts.theme === "light" || opts.theme === "dark")
       ? (opts.theme as "light" | "dark")
       : undefined;
+  const envNoWelcome =
+    typeof process.env.MAESTER_NO_WELCOME === "string" && process.env.MAESTER_NO_WELCOME.length > 0;
   return {
     verbose: opts.verbose === true,
     quiet: opts.quiet === true,
     json: opts.json === true,
     color,
     ...(theme ? { theme } : {}),
-    noWelcome: opts.welcome === false,
+    noWelcome: opts.welcome === false || envNoWelcome,
   };
 }
 
@@ -97,6 +117,10 @@ async function runNoArgs(ctx: CliContext): Promise<number> {
   const roles = detectRoles(ctx.repoRoot.path);
   const showWelcome = !roles.hasCitadel && !roles.hasMaester && !ctx.flags.noWelcome;
   if (showWelcome) {
+    const banner = bannerForContext(ctx.theming, readColumns(), "living specs · v0.1.0");
+    if (banner.length > 0) {
+      process.stdout.write(`${banner}\n\n`);
+    }
     ctx.prompts.intro("Welcome to maester");
     ctx.prompts.log.message("This repository has no citadel or maester config yet.");
   }

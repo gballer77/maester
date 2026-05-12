@@ -49,33 +49,33 @@ implementation-order: 5
 
 ## 4. Capabilities
 
-- [ ] **P0**: A canonical ASCII-art banner is displayed at exactly three points — `maester --help`, `maester --version`, and the first-run welcome screen — and nowhere else.
+- [x] **P0**: A canonical ASCII-art banner is displayed at exactly three points — `maester --help`, `maester --version`, and the first-run welcome screen — and nowhere else.
   - On those three surfaces, the banner appears as the first content rendered to stdout on an interactive terminal.
   - Routine commands (anything other than `--help`, `--version`, and first-run) never render the banner.
   - Banner content is fixed and version-controlled — every invocation under the same release shows the same art.
   - The banner does not require user input and does not block on anything (rendering is synchronous and instant).
 
-- [ ] **P0**: Two size variants exist (a full version and a compact version), and the CLI auto-selects which to render based on the current terminal width.
+- [x] **P0**: Two size variants exist (a full version and a compact version), and the CLI auto-selects which to render based on the current terminal width.
   - When the terminal width is at or above a defined threshold, the full banner is rendered.
   - When the width is below that threshold but at or above a compact-variant minimum, the compact banner is rendered.
   - The two variants depict the same subject and feel like the same brand mark at different scales.
 
-- [ ] **P0**: The banner is suppressed automatically when output is not going to an interactive terminal.
+- [x] **P0**: The banner is suppressed automatically when output is not going to an interactive terminal.
   - When stdout is not a TTY (piped, redirected, CI log), the banner is not rendered at all — no escape sequences and no plain-text fallback.
   - Detection happens automatically; the user does not need to pass a flag for the common non-TTY case.
   - This behavior matches the auto-detection rules already established by the CLI's styling layer.
 
-- [ ] **P0**: The banner is rendered through the CLI's styling layer and inherits its theme.
+- [x] **P0**: The banner is rendered through the CLI's styling layer and inherits its theme.
   - Banner colors come from theme tokens defined by the styling layer; no hard-coded color literals appear in banner code.
   - The banner respects `NO_COLOR` and any explicit color override flags already supported by the styling layer.
   - Changing a relevant theme token updates the banner's coloring without touching banner-specific code.
 
-- [ ] **P1**: A user can explicitly suppress the first-run welcome banner via a documented flag and/or environment variable.
+- [x] **P1**: A user can explicitly suppress the first-run welcome banner via a documented flag and/or environment variable.
   - When the opt-out is active, the first-run welcome banner is not rendered regardless of terminal width or TTY state.
   - The opt-out does not affect `--help` or `--version`, where the banner is explicitly requested by the invocation.
   - The opt-out is discoverable from the CLI's help output.
 
-- [ ] **P1**: When the terminal is too narrow for even the compact variant, the banner is skipped without breaking the CLI.
+- [x] **P1**: When the terminal is too narrow for even the compact variant, the banner is skipped without breaking the CLI.
   - If the terminal width is below the compact-variant minimum, no banner is rendered and the CLI proceeds normally.
   - No partial or wrapped banner is ever emitted — the banner is rendered in full or not at all.
   - The skip is silent (no warning or error to the user).

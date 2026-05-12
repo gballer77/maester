@@ -1,0 +1,38 @@
+import type { Theming } from "../theme/index.js";
+
+const FULL = String.raw`                       __
+    __ _  ___ ____ ___ / /____ ____
+   /  ' \/ _ \`/ -_|_-</ __/ -_) __/
+  /_/_/_/\_,_/\__/___/\__/\__/_/`;
+
+const COMPACT = "maester";
+
+const MIN_WIDTH_FOR_FULL = 80;
+const MIN_WIDTH_FOR_COMPACT = 40;
+
+export type BannerVariant = "full" | "compact" | "suppressed";
+
+export function selectBannerVariant(columns: number, isTTY: boolean): BannerVariant {
+  if (!isTTY) return "suppressed";
+  if (columns < MIN_WIDTH_FOR_COMPACT) return "suppressed";
+  if (columns < MIN_WIDTH_FOR_FULL) return "compact";
+  return "full";
+}
+
+export function renderBanner(
+  theming: Theming,
+  variant: BannerVariant,
+  opts: { subtitle?: string } = {},
+): string {
+  if (variant === "suppressed") return "";
+  const art = variant === "full" ? FULL : COMPACT;
+  const accentArt = theming.painter.token("accent", art);
+  if (!opts.subtitle) return accentArt;
+  const subtitle = theming.painter.dim(opts.subtitle);
+  return `${accentArt}\n  ${subtitle}`;
+}
+
+export function bannerForContext(theming: Theming, columns: number, subtitle?: string): string {
+  const variant = selectBannerVariant(columns, theming.caps.isTTY);
+  return renderBanner(theming, variant, subtitle !== undefined ? { subtitle } : {});
+}
