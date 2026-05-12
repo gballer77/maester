@@ -1,0 +1,70 @@
+{
+  "name": "maester",
+  "version": "0.1.0",
+  "description": "A Node CLI for aggregating documentation from many sources into one central knowledge home for developers and AI agents.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "bin": {
+    "maester": "bin/maester.mjs"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["bin", "dist", "README.md", "CHANGELOG.md", "LICENSE"],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "tsc --noEmit",
+    "format": "biome format --write .",
+    "prepare": "simple-git-hooks",
+    "prepublishOnly": "pnpm run lint && pnpm run typecheck && pnpm run test && pnpm run build"
+  },
+  "simple-git-hooks": {
+    "pre-commit": "pnpm exec biome check --staged --no-errors-on-unmatched && pnpm exec tsc --noEmit"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["@biomejs/biome", "esbuild", "simple-git-hooks"]
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.9.1",
+    "boxen": "^8.0.1",
+    "chalk": "^5.4.1",
+    "cli-progress": "^3.12.0",
+    "cli-table3": "^0.6.5",
+    "commander": "^13.1.0",
+    "consola": "^3.4.0",
+    "figlet": "^1.8.0",
+    "globby": "^14.1.0",
+    "is-unicode-supported": "^2.1.0",
+    "pathe": "^2.0.2",
+    "simple-git": "^3.27.0",
+    "supports-color": "^10.0.0",
+    "terminal-link": "^4.0.0",
+    "yaml": "^2.7.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@types/cli-progress": "^3.11.6",
+    "@types/figlet": "^1.7.0",
+    "@types/node": "^22.10.7",
+    "simple-git-hooks": "^2.11.1",
+    "tsup": "^8.3.5",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  },
+  "keywords": ["cli", "documentation", "aggregation", "git", "knowledge", "monorepo", "ai-context"],
+  "license": "MIT"
+}
