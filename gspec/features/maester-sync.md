@@ -59,56 +59,56 @@ implementation-order: 4
 
 ## 4. Capabilities
 
-- [ ] **P0**: Sync can be invoked from the repository root with a single command
+- [x] **P0**: Sync can be invoked from the repository root with a single command
   - The scaffolded entrypoint is runnable without arguments and performs a full sync of all configured maesters
   - Running outside a repository that has a citadel configuration exits with a clear error and non-zero status
   - The command produces human-readable output that names each maester as it is processed
 
-- [ ] **P0**: Sync reads and validates the citadel configuration before doing any work
+- [x] **P0**: Sync reads and validates the citadel configuration before doing any work
   - A missing config file produces a clear, actionable error referencing how to create one
   - A malformed config (invalid YAML / schema violation) produces a clear error pointing at the offending field
   - No remote operations occur until config validation has passed
 
-- [ ] **P0**: Sync fetches each maester at its configured ref
+- [x] **P0**: Sync fetches each maester at its configured ref
   - Each maester's remote git URL is fetched at the configured ref (branch, tag, or commit); when no ref is specified, the remote's default branch is used
   - Repeated runs update in place rather than re-cloning from scratch every time
   - The local fetch storage is treated as managed cache and is not expected to be committed
 
-- [ ] **P0**: Sync authenticates using environment-variable references resolved at runtime
+- [x] **P0**: Sync authenticates using environment-variable references resolved at runtime
   - For maesters with `auth.type: "token"` and an env-var name, the value is read from that environment variable at execution time
   - A missing required environment variable causes that maester to fail with a clear message naming the missing variable; other maesters continue
   - No secret value is ever printed, logged, or written to disk by the sync output
 
-- [ ] **P0**: Sync surfaces each maester's content into its destination directory
+- [x] **P0**: Sync surfaces each maester's content into its destination directory
   - Default destination is `citadel/<maester-name>/` at the repository root
   - A per-maester `destination` override in the config is honored exactly
   - The destination directory's content for that maester reflects the fetched remote content for that run (no stale leftover files from a previous sync of the same maester)
 
-- [ ] **P0**: Sync is idempotent across repeated runs
+- [x] **P0**: Sync is idempotent across repeated runs
   - Running sync twice in a row with no remote changes produces no file modifications on the second run (modification timestamps may change; content hashes do not)
   - When a maester's remote ref has not advanced, the maester is reported as "unchanged"
   - When a maester's remote ref has advanced, only the affected files in the destination are written
 
-- [ ] **P0**: Sync continues past per-maester failures and reports them at the end
+- [x] **P0**: Sync continues past per-maester failures and reports them at the end
   - A failure to fetch, authenticate against, or copy one maester does not abort the run for the remaining maesters
   - A final summary lists each maester with its outcome (added / updated / unchanged / failed) and an error message for each failure
   - Exit code is non-zero if and only if at least one maester failed
 
-- [ ] **P1**: User can scope a sync run to one or more named maesters
+- [x] **P1**: User can scope a sync run to one or more named maesters
   - The entrypoint accepts a list of maester names and processes only those
   - An unknown name produces a clear error and non-zero exit before any work begins
   - All capabilities above apply identically to the scoped subset
 
-- [ ] **P1**: Sync honors path filters published by each maester's own configuration in the remote repo
+- [x] **P1**: Sync honors path filters published by each maester's own configuration in the remote repo
   - When the maester's remote repo includes a recognized self-description that limits what it publishes, the sync surfaces only the published subset
   - When no such self-description exists, the sync surfaces the maester's full tree at the configured ref (current default behavior)
   - The exact schema of that self-description is owned by a future feature; this capability is met when the sync respects whatever convention that feature defines
 
-- [ ] **P1**: Sync output is machine-readable when requested
+- [x] **P1**: Sync output is machine-readable when requested
   - A flag (e.g. `--json`) emits structured per-maester results suitable for CI consumption
   - The default human-readable output remains the standard mode when no flag is passed
 
-- [ ] **P2**: Sync surfaces a stable provenance marker per maester
+- [x] **P2**: Sync surfaces a stable provenance marker per maester
   - Each maester's destination directory contains a small metadata record indicating which remote URL, ref, and commit SHA produced its current content
   - The marker is regenerated on every successful sync of that maester
   - The marker is human-readable and small enough to be safe to commit

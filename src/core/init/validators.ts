@@ -16,11 +16,13 @@ export function validateSourceName(value: string): ValidationResult {
 export function validateGitUrl(value: string): ValidationResult {
   if (!value || value.length === 0) return { ok: false, reason: "URL cannot be empty." };
   if (/\s/.test(value)) return { ok: false, reason: "URL cannot contain whitespace." };
-  if (value.startsWith("https://") || value.startsWith("ssh://")) return { ok: true };
+  if (value.startsWith("https://") || value.startsWith("ssh://") || value.startsWith("file://")) {
+    return { ok: true };
+  }
   if (/^git@[^\s:]+:\S+$/.test(value)) return { ok: true };
   return {
     ok: false,
-    reason: "URL must start with https://, ssh://, or use the git@host:path form.",
+    reason: "URL must start with https://, ssh://, file://, or use the git@host:path form.",
   };
 }
 

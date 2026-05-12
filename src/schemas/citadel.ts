@@ -2,7 +2,7 @@ import { z } from "zod";
 
 export const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 export const ENV_VAR_RE = /^[A-Z][A-Z0-9_]*$/;
-const URL_FORMS = [/^https:\/\/\S+$/i, /^ssh:\/\/\S+$/i, /^git@[^\s:]+:\S+$/];
+const URL_FORMS = [/^https:\/\/\S+$/i, /^ssh:\/\/\S+$/i, /^git@[^\s:]+:\S+$/, /^file:\/\/\S+$/i];
 
 function isValidGitUrl(url: string): boolean {
   if (/\s/.test(url)) return false;

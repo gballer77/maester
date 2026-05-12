@@ -4,6 +4,7 @@ import { MaesterError } from "../core/errors.js";
 import { PromptCancelledError } from "../ui/prompts.js";
 import { registerInit, runInit } from "./commands/init.js";
 import { registerPublish, runPublish } from "./commands/publish.js";
+import { registerSync } from "./commands/sync.js";
 import { type CliContext, type GlobalFlags, buildContext } from "./context.js";
 import { showTopLevelMenu } from "./menu.js";
 
@@ -55,6 +56,7 @@ function buildProgram(): Command {
 
   registerInit(program, () => buildContext(extractFlags(program.opts())));
   registerPublish(program, () => buildContext(extractFlags(program.opts())));
+  registerSync(program, () => buildContext(extractFlags(program.opts())));
 
   program.action(async () => {
     const ctx = buildContext(extractFlags(program.opts()));
