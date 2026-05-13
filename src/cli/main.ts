@@ -8,7 +8,7 @@ import { readColumns } from "../ui/width.js";
 import { registerInit, runInit } from "./commands/init.js";
 import { registerPublish, runPublish } from "./commands/publish.js";
 import { registerSkill } from "./commands/skill.js";
-import { registerStatus } from "./commands/status.js";
+import { registerStatus, runStatusCommand } from "./commands/status.js";
 import { registerSync } from "./commands/sync.js";
 import { type CliContext, type GlobalFlags, buildContext } from "./context.js";
 import { showTopLevelMenu } from "./menu.js";
@@ -132,7 +132,7 @@ async function runNoArgs(ctx: CliContext): Promise<number> {
       case "publish":
         return runPublish(ctx);
       case "status":
-        return runRoleSummary(ctx);
+        return runStatusCommand(ctx, []);
       case "exit":
         ctx.prompts.outro("Goodbye.");
         return 0;
@@ -144,12 +144,4 @@ async function runNoArgs(ctx: CliContext): Promise<number> {
     }
     throw err;
   }
-}
-
-async function runRoleSummary(ctx: CliContext): Promise<number> {
-  const roles = detectRoles(ctx.repoRoot.path);
-  ctx.prompts.log.message(`Citadel: ${roles.hasCitadel ? "configured" : "not configured"}`);
-  ctx.prompts.log.message(`Maester: ${roles.hasMaester ? "configured" : "not configured"}`);
-  ctx.prompts.outro("");
-  return 0;
 }

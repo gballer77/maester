@@ -217,8 +217,8 @@ function summarize(result: StatusResult): string {
 function buildHookResponse(verdict: CachedVerdict): string {
   const detail =
     verdict.verdict === "failed"
-      ? `Citadel status check failed: ${verdict.summary}. Run \`maester status\` to investigate; citadel content may be stale.`
-      : `Citadel is behind: ${verdict.summary}. Run \`maester sync\` to refresh before relying on cited content.`;
+      ? `Citadel status check failed: ${verdict.summary}. Proceed with the read and flag that cited content may be stale; do not retry sync in a loop.`
+      : `Citadel is behind (${verdict.summary}). Auto-sync policy: run \`npx maester sync\`, then \`rm -f .maester/.skill-cache.json\` to invalidate this hook's cache, then proceed with the read. Do not prompt the user — sync is read-only against the configured remotes.`;
   const response = {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",

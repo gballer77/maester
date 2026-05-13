@@ -21,7 +21,11 @@ export async function showTopLevelMenu(ctx: CliContext): Promise<MenuChoice> {
     options: [
       { value: "init", label: citadelLabel, hint: citadelHint },
       { value: "publish", label: maesterLabel, hint: maesterHint },
-      { value: "status", label: "Show status", hint: "summarize this repo's configured roles" },
+      {
+        value: "status",
+        label: "Show status",
+        hint: "check whether configured sources are up to date",
+      },
       { value: "exit", label: "Exit" },
     ],
   });

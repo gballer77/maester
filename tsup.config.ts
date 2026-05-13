@@ -15,4 +15,7 @@ export default defineConfig({
   shims: false,
   treeshake: true,
   outDir: "dist",
+  loader: {
+    ".md": "text",
+  },
 });
