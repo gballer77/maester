@@ -6,6 +6,8 @@
 
 Maester is a Node CLI and helper library for teams whose knowledge is spread across multiple sources — Git repositories today, with hosted document tools and web sources planned next. Each source (a **maester**) declares its relevant docs, and a **citadel** gathers them into a structured knowledge base that is easier to read, update, and reason over.
 
+For sources you do not own (public third-party repos, vendor docs you have read access to), the citadel can also register **ravens** — see below.
+
 ## Two roles, two files
 
 Maester defines two repository roles, each declared by a single committed YAML file at the repo root:
@@ -32,6 +34,30 @@ In a repository that *publishes* docs to other citadels:
 ```sh
 npx maester publish      # maester manifest walkthrough
 ```
+
+## Ravens — pulling from sources you don't own
+
+A citadel can declare **ravens** alongside its maesters. A raven is a git source the citadel pulls without any `maester.yaml` on the remote side — useful for public third-party repos and vendor docs you have read access to but cannot modify. Because the source publishes no manifest, the citadel itself declares an `includes` list (paths or globs) saying what to materialize.
+
+```yaml
+# citadel.yaml (excerpt)
+schemaVersion: 2
+
+maesters:
+  - name: design-system
+    url: https://github.com/example-org/design-system.git
+
+ravens:
+  - name: react-docs
+    url: https://github.com/facebook/react.git
+    ref: main
+    includes:
+      - docs/**/*.md
+      - README.md
+    description: Upstream React documentation snapshot.
+```
+
+`npx maester sync` syncs both kinds in one pass and labels each line with `[maester]` or `[raven]`. The trade-off versus a maester: when the source repo restructures, the citadel's `includes` may need to be updated. Sync prints a warning when a raven's includes resolve to zero files so drift is visible.
 
 ## Prerequisites
 

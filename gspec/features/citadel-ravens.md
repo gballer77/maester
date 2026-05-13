@@ -57,66 +57,66 @@ spec-version: v1
 
 ## 4. Capabilities
 
-- [ ] **P0**: Citadel configuration supports a `ravens` section alongside `maesters`
+- [x] **P0**: Citadel configuration supports a `ravens` section alongside `maesters`
   - The schema version is bumped so consumers can distinguish citadels with and without raven support
   - A citadel with zero ravens (only maesters) is fully valid and behaves identically to before
   - A citadel with zero maesters and one or more ravens is also fully valid
   - Older citadel configs (no ravens key) are accepted unchanged
 
-- [ ] **P0**: Each raven entry declares the fields needed for sync
+- [x] **P0**: Each raven entry declares the fields needed for sync
   - Required per raven: a short unique name, a git URL, a ref (with the same "default branch when unspecified" rule as maesters), and a non-empty list of include paths/globs
   - Optional per raven: a destination override (repo-relative path), an auth block, a short description
   - An entry missing any required field or with an empty includes list is rejected with a clear error pointing at the offending field
 
-- [ ] **P0**: Raven names share the same namespace as maester names within a citadel
+- [x] **P0**: Raven names share the same namespace as maester names within a citadel
   - The configuration is rejected if any raven name matches any maester name in the same citadel
   - The collision error names both colliding entries so the user can rename one
   - Within ravens, duplicate names are likewise rejected
 
-- [ ] **P0**: Ravens authenticate using environment-variable references, identical to maesters
+- [x] **P0**: Ravens authenticate using environment-variable references, identical to maesters
   - Per-raven auth defaults to `none`
   - When `auth.type` is `token`, the entry stores only the env-var name (e.g. `VENDOR_DOCS_TOKEN`), never a secret value
   - A missing required env var at sync time fails only that raven; other entries (maesters or ravens) continue
   - No secret value appears in sync stdout, stderr, or any written file
 
-- [ ] **P0**: Sync processes ravens with the same single command that processes maesters
+- [x] **P0**: Sync processes ravens with the same single command that processes maesters
   - Running sync with no arguments fetches every configured maester and every configured raven
   - Each raven is fetched at its configured ref using the same git mechanics as maesters
   - The destination is populated with **only** the files matching the raven's includes; anything outside the includes never appears in the destination
   - Repeated runs are idempotent in the same sense as maesters (no spurious modifications when the source ref has not advanced)
 
-- [ ] **P0**: Sync output labels each entry as `maester` or `raven`
+- [x] **P0**: Sync output labels each entry as `maester` or `raven`
   - The per-entry status line is unambiguous about which kind it is (e.g. `[raven] vendor-docs    updated`)
   - The final summary groups or otherwise distinguishes outcomes by kind so the user can see, for example, "3 maesters unchanged, 1 raven updated"
   - The exit-code rule from maester sync still applies: non-zero if and only if at least one entry (of either kind) failed
 
-- [ ] **P0**: Ravens land in `citadel/<raven-name>/` by default with override support
+- [x] **P0**: Ravens land in `citadel/<raven-name>/` by default with override support
   - Default destination is `citadel/<raven-name>/` at the repository root, identical to maesters
   - A per-raven destination override is honored exactly, with the same repo-relative + no-`..` rules as maesters
   - The configuration is rejected if any raven's destination collides with any other entry's destination (maester or raven) in the same citadel
 
-- [ ] **P0**: The citadel initialization walkthrough can register ravens
+- [x] **P0**: The citadel initialization walkthrough can register ravens
   - During the walkthrough the user is offered the option to register one or more ravens after (or instead of) maesters
   - For each raven, the walkthrough collects: name, git URL, ref, includes (at least one), optional destination override, optional auth env-var name, optional description
   - The walkthrough enforces all configuration-level rules above (uniqueness across maesters + ravens, non-empty includes, destination collision detection) before saving
   - A user who declines to register any raven finishes init unchanged from the existing maester-only flow
 
-- [ ] **P1**: Sync warns when a raven's includes match zero files at the resolved ref
+- [x] **P1**: Sync warns when a raven's includes match zero files at the resolved ref
   - The raven is reported with a clear "no files matched includes" warning in the output
   - The warning does not by itself fail the raven or the sync — the destination is left in a known-empty state and the run continues
   - The warning text references the raven name and the includes list so the user can act on it
 
-- [ ] **P1**: User can scope a sync run to specific raven names
+- [x] **P1**: User can scope a sync run to specific raven names
   - The same scoping mechanism that selects maesters by name (delivered by [Maester Sync](maester-sync.md)) also selects ravens by name
   - Unknown names produce a clear error and non-zero exit before any work begins, regardless of whether the name would have been a raven or a maester
   - All sync semantics above apply identically to the scoped subset
 
-- [ ] **P1**: Ravens carry optional human-readable metadata
+- [x] **P1**: Ravens carry optional human-readable metadata
   - Each raven entry may include a short description and a list of short tags
   - Metadata is surfaced in sync output where helpful (e.g. alongside the raven name in verbose mode) and is otherwise informational
   - Metadata fields are optional everywhere — entries without them remain valid
 
-- [ ] **P2**: Sync emits a provenance marker for each raven, mirroring maesters
+- [x] **P2**: Sync emits a provenance marker for each raven, mirroring maesters
   - The raven's destination contains a small metadata record naming the source URL, ref, resolved commit SHA, and the includes list active for that run
   - The marker is regenerated on every successful sync of that raven and is human-readable
   - The marker makes it possible to tell at a glance which version of which source produced the current files
