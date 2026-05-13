@@ -58,3 +58,23 @@ export function validateDestination(value: string): ValidationResult {
   }
   return { ok: true };
 }
+
+export function validateIncludesEntry(value: string): ValidationResult {
+  if (!value || value.length === 0) return { ok: false, reason: "Includes entry cannot be empty." };
+  if (/^\s+$/.test(value)) return { ok: false, reason: "Includes entry cannot be whitespace." };
+  if (value.startsWith("/")) {
+    return { ok: false, reason: "Includes entry must be repo-relative (no leading '/')." };
+  }
+  if (value.split(/[\\/]+/).some((seg) => seg === "..")) {
+    return { ok: false, reason: "Includes entry cannot contain '..' segments." };
+  }
+  return { ok: true };
+}
+
+export function validateTag(value: string): ValidationResult {
+  if (!value || value.length === 0) return { ok: false, reason: "Tag cannot be empty." };
+  if (!SLUG_RE.test(value)) {
+    return { ok: false, reason: "Tag must be a kebab-case slug." };
+  }
+  return { ok: true };
+}

@@ -34,8 +34,9 @@ describe("runSync against fixture bare repos", () => {
       { path: "docs/x.md", contents: "x\n" },
     ]);
     const config: CitadelConfig = {
-      schemaVersion: 1,
-      sources: [{ name: "alpha", url: remote.bareRepoUrl, ref: "main" }],
+      schemaVersion: 2,
+      maesters: [{ name: "alpha", url: remote.bareRepoUrl, ref: "main" }],
+      ravens: [],
     };
 
     const result = await runSync(config, { repoRoot: repo.path });
@@ -52,8 +53,9 @@ describe("runSync against fixture bare repos", () => {
   it("reports 'unchanged' on a no-op re-sync", async () => {
     const remote = await newRemote([{ path: "README.md", contents: "# alpha\n" }]);
     const config: CitadelConfig = {
-      schemaVersion: 1,
-      sources: [{ name: "alpha", url: remote.bareRepoUrl, ref: "main" }],
+      schemaVersion: 2,
+      maesters: [{ name: "alpha", url: remote.bareRepoUrl, ref: "main" }],
+      ravens: [],
     };
     await runSync(config, { repoRoot: repo.path });
     const second = await runSync(config, { repoRoot: repo.path });
@@ -67,8 +69,9 @@ describe("runSync against fixture bare repos", () => {
       { path: "private/secret.md", contents: "do not publish\n" },
     ]);
     const config: CitadelConfig = {
-      schemaVersion: 1,
-      sources: [{ name: "alpha", url: remote.bareRepoUrl, ref: "main" }],
+      schemaVersion: 2,
+      maesters: [{ name: "alpha", url: remote.bareRepoUrl, ref: "main" }],
+      ravens: [],
     };
     const result = await runSync(config, { repoRoot: repo.path });
     expect(result.outcomes[0]?.filterMode).toBe("manifest");
@@ -80,11 +83,12 @@ describe("runSync against fixture bare repos", () => {
   it("marks a single source failed without affecting other sources", async () => {
     const goodRemote = await newRemote([{ path: "README.md", contents: "ok\n" }]);
     const config: CitadelConfig = {
-      schemaVersion: 1,
-      sources: [
+      schemaVersion: 2,
+      maesters: [
         { name: "good", url: goodRemote.bareRepoUrl, ref: "main" },
         { name: "bad", url: goodRemote.bareRepoUrl, ref: "branch-that-does-not-exist" },
       ],
+      ravens: [],
     };
     const result = await runSync(config, { repoRoot: repo.path });
     expect(result.failed).toBe(1);
@@ -97,8 +101,8 @@ describe("runSync against fixture bare repos", () => {
   it("marks a source failed when a referenced env var is missing", async () => {
     const remote = await newRemote([{ path: "README.md", contents: "x\n" }]);
     const config: CitadelConfig = {
-      schemaVersion: 1,
-      sources: [
+      schemaVersion: 2,
+      maesters: [
         {
           name: "with-auth",
           url: remote.bareRepoUrl,
@@ -106,6 +110,7 @@ describe("runSync against fixture bare repos", () => {
           auth: { type: "token", envVar: "MAESTER_TEST_TOKEN_THAT_IS_UNSET" },
         },
       ],
+      ravens: [],
     };
     const { MAESTER_TEST_TOKEN_THAT_IS_UNSET: _ignored, ...envWithoutToken } = process.env;
     const result = await runSync(config, { repoRoot: repo.path, env: envWithoutToken });
@@ -117,11 +122,12 @@ describe("runSync against fixture bare repos", () => {
     const a = await newRemote([{ path: "a.md", contents: "a\n" }]);
     const b = await newRemote([{ path: "b.md", contents: "b\n" }]);
     const config: CitadelConfig = {
-      schemaVersion: 1,
-      sources: [
+      schemaVersion: 2,
+      maesters: [
         { name: "alpha", url: a.bareRepoUrl, ref: "main" },
         { name: "beta", url: b.bareRepoUrl, ref: "main" },
       ],
+      ravens: [],
     };
     const result = await runSync(config, { repoRoot: repo.path, scope: ["beta"] });
     expect(result.outcomes).toHaveLength(1);

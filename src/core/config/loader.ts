@@ -2,7 +2,12 @@ import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { type YAMLError, parseDocument } from "yaml";
 import type { z } from "zod";
-import { type CitadelConfig, CitadelConfigSchema } from "../../schemas/citadel.js";
+import {
+  type CitadelConfig,
+  CitadelConfigSchema,
+  CitadelConfigV1Schema,
+  migrateCitadelV1ToV2,
+} from "../../schemas/citadel.js";
 import { type MaesterConfig, MaesterConfigSchema } from "../../schemas/maester.js";
 import { ConfigError } from "../errors.js";
 import { citadelConfigPath, maesterConfigPath } from "./paths.js";
@@ -16,7 +21,20 @@ export async function loadCitadelConfig(repoRoot: string): Promise<CitadelConfig
     );
   }
   const raw = await readFile(path, "utf8");
-  return parseAndValidate(raw, CitadelConfigSchema, path);
+  const data = parseYaml(raw, path);
+  const version = (data as { schemaVersion?: unknown }).schemaVersion;
+
+  if (version === 2) {
+    return runSchema(data, CitadelConfigSchema, path);
+  }
+  if (version === 1) {
+    const v1 = runSchema(data, CitadelConfigV1Schema, path);
+    return migrateCitadelV1ToV2(v1);
+  }
+  throw new ConfigError(
+    `${path}: unsupported schemaVersion ${describeVersion(version)}. Expected 1 or 2.`,
+    { filePath: path },
+  );
 }
 
 export async function loadMaesterConfig(repoRoot: string): Promise<MaesterConfig> {
@@ -45,6 +63,11 @@ export function parseAndValidate<T extends z.ZodTypeAny>(
   schema: T,
   filePath: string,
 ): z.infer<T> {
+  const data = parseYaml(raw, filePath);
+  return runSchema(data, schema, filePath);
+}
+
+function parseYaml(raw: string, filePath: string): unknown {
   const doc = parseDocument(raw, { keepSourceTokens: false });
   const yamlErrors = doc.errors;
   if (yamlErrors.length > 0) {
@@ -57,7 +80,10 @@ export function parseAndValidate<T extends z.ZodTypeAny>(
       cause: first,
     });
   }
-  const data = doc.toJS({ maxAliasCount: -1 });
+  return doc.toJS({ maxAliasCount: -1 });
+}
+
+function runSchema<T extends z.ZodTypeAny>(data: unknown, schema: T, filePath: string): z.infer<T> {
   const result = schema.safeParse(data);
   if (!result.success) {
     const issue = result.error.issues[0];
@@ -68,6 +94,12 @@ export function parseAndValidate<T extends z.ZodTypeAny>(
     });
   }
   return result.data;
+}
+
+function describeVersion(value: unknown): string {
+  if (value === undefined) return "<missing>";
+  if (typeof value === "number" || typeof value === "string") return String(value);
+  return JSON.stringify(value);
 }
 
 function positionFromError(err: YAMLError, raw: string): { line: number; column: number } {

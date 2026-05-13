@@ -186,6 +186,7 @@ erDiagram
         AuthRef auth "discriminated union"
         string destination "optional override; repo-relative"
         string description "optional; surfaced in verbose output"
+        string[] tags "optional; surfaced in verbose output"
     }
     AuthRef {
         enum type "none, token"
@@ -257,6 +258,7 @@ Introduced by: [Citadel Initialization](features/citadel-initialization.md). Con
 | `auth` | `AuthRef` | Optional; defaults to `{ type: "none" }`. Mechanism identical to `MaesterSource`. |
 | `destination` | string | Optional. Same shape rules as `MaesterSource.destination`. Default: `citadel/<name>/`. |
 | `description` | string | Optional. Free text; surfaced in `--verbose` output alongside the entry name. |
+| `tags` | string[] | Optional. Each tag is a slug (`^[a-z0-9][a-z0-9-]*$`). Surfaced in `--verbose` output. |
 
 Introduced by: [Citadel Ravens](features/citadel-ravens.md). Consumed by: [Maester Sync](features/maester-sync.md) via `src/core/sources/raven.ts`.
 

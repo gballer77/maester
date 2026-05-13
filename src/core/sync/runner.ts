@@ -54,7 +54,10 @@ export async function runSync(config: CitadelConfig, options: SyncOptions): Prom
   const scope = options.scope?.length ? new Set(options.scope) : undefined;
 
   if (scope) {
-    const known = new Set(config.sources.map((s) => s.name));
+    const known = new Set([
+      ...config.maesters.map((s) => s.name),
+      ...config.ravens.map((s) => s.name),
+    ]);
     for (const name of scope) {
       if (!known.has(name)) {
         throw new MaesterError(
@@ -65,7 +68,7 @@ export async function runSync(config: CitadelConfig, options: SyncOptions): Prom
     }
   }
 
-  const sources = config.sources.filter((s) => !scope || scope.has(s.name));
+  const sources = config.maesters.filter((s) => !scope || scope.has(s.name));
   const limit = Math.min(
     Math.max(1, options.concurrency ?? DEFAULT_CONCURRENCY),
     sources.length || 1,

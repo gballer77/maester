@@ -10,6 +10,7 @@ export type {
 export type {
   CitadelConfig,
   MaesterSource,
+  RavenSource,
   AuthRef,
 } from "./schemas/citadel.js";
 export type {

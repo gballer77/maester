@@ -49,8 +49,9 @@ describe("CLI: maester sync", () => {
     const remote = await createBareRemote({ files: [{ path: "README.md", contents: "ok\n" }] });
     remotes.push(remote);
     await writeCitadelConfig(repo.path, {
-      schemaVersion: 1,
-      sources: [{ name: "alpha", url: toFileUrl(remote.bareRepoUrl), ref: "main" }],
+      schemaVersion: 2,
+      maesters: [{ name: "alpha", url: toFileUrl(remote.bareRepoUrl), ref: "main" }],
+      ravens: [],
     });
     const result = await runCli(["sync"], repo.path);
     expect(result.code).toBe(0);
@@ -62,8 +63,9 @@ describe("CLI: maester sync", () => {
     const remote = await createBareRemote({ files: [{ path: "README.md", contents: "ok\n" }] });
     remotes.push(remote);
     await writeCitadelConfig(repo.path, {
-      schemaVersion: 1,
-      sources: [{ name: "alpha", url: toFileUrl(remote.bareRepoUrl), ref: "no-such-branch" }],
+      schemaVersion: 2,
+      maesters: [{ name: "alpha", url: toFileUrl(remote.bareRepoUrl), ref: "no-such-branch" }],
+      ravens: [],
     });
     const result = await runCli(["sync"], repo.path);
     expect(result.code).not.toBe(0);
@@ -75,8 +77,9 @@ describe("CLI: maester sync", () => {
     const remote = await createBareRemote({ files: [{ path: "README.md", contents: "ok\n" }] });
     remotes.push(remote);
     await writeCitadelConfig(repo.path, {
-      schemaVersion: 1,
-      sources: [{ name: "alpha", url: toFileUrl(remote.bareRepoUrl), ref: "main" }],
+      schemaVersion: 2,
+      maesters: [{ name: "alpha", url: toFileUrl(remote.bareRepoUrl), ref: "main" }],
+      ravens: [],
     });
     const result = await runCli(["--json", "sync"], repo.path);
     expect(result.code).toBe(0);
@@ -93,8 +96,9 @@ describe("CLI: maester sync", () => {
     const remote = await createBareRemote({ files: [{ path: "README.md", contents: "ok\n" }] });
     remotes.push(remote);
     await writeCitadelConfig(repo.path, {
-      schemaVersion: 1,
-      sources: [{ name: "alpha", url: toFileUrl(remote.bareRepoUrl), ref: "main" }],
+      schemaVersion: 2,
+      maesters: [{ name: "alpha", url: toFileUrl(remote.bareRepoUrl), ref: "main" }],
+      ravens: [],
     });
     const result = await runCli(["sync", "ghost"], repo.path);
     expect(result.code).not.toBe(0);

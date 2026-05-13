@@ -41,9 +41,8 @@ export async function runSyncCommand(
   }
 
   if (!ctx.flags.json) {
-    ctx.logger.info(
-      `Syncing ${scope.length > 0 ? scope.length : config.sources.length} source(s)…`,
-    );
+    const totalConfigured = config.maesters.length + config.ravens.length;
+    ctx.logger.info(`Syncing ${scope.length > 0 ? scope.length : totalConfigured} source(s)…`);
   }
 
   const result = await runSync(config, {
