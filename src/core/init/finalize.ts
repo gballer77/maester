@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import type { CitadelConfig, MaesterSource, RavenSource } from "../../schemas/citadel.js";
+import type { CitadelConfig, Source } from "../../schemas/citadel.js";
 import { CACHE_DIR_NAME, defaultDestinationFor } from "../config/paths.js";
 import { writeCitadelConfig } from "../config/writer.js";
 import { appendMissingGitignoreEntries } from "../repo/gitignore.js";
@@ -12,8 +12,8 @@ export type FinalizeResult = {
 };
 
 export type FinalizeInput = {
-  maesters: MaesterSource[];
-  ravens: RavenSource[];
+  sources: Source[];
+  baseDir?: string;
 };
 
 export async function finalizeCitadel(
@@ -22,9 +22,9 @@ export async function finalizeCitadel(
 ): Promise<FinalizeResult> {
   detectDestinationCollisions(repoRoot, input);
   const config: CitadelConfig = {
-    schemaVersion: 2,
-    maesters: input.maesters,
-    ravens: input.ravens,
+    schemaVersion: 1,
+    ...(input.baseDir ? { baseDir: input.baseDir } : {}),
+    sources: input.sources,
   };
   const citadelPath = await writeCitadelConfig(repoRoot, config);
   const gitignore = await appendMissingGitignoreEntries(repoRoot, [`${CACHE_DIR_NAME}/`]);
@@ -37,7 +37,6 @@ export async function finalizeCitadel(
 }
 
 type EntryDescriptor = {
-  kind: "maester" | "raven";
   name: string;
   destination: string | undefined;
 };
@@ -45,37 +44,24 @@ type EntryDescriptor = {
 export function detectDestinationCollisions(
   repoRoot: string,
   input: FinalizeInput | EntryDescriptor[],
+  baseDirArg?: string,
 ): void {
+  const baseDir = Array.isArray(input) ? baseDirArg : input.baseDir;
   const entries: EntryDescriptor[] = Array.isArray(input)
     ? input
-    : [
-        ...input.maesters.map(
-          (m): EntryDescriptor => ({
-            kind: "maester",
-            name: m.name,
-            destination: m.destination,
-          }),
-        ),
-        ...input.ravens.map(
-          (r): EntryDescriptor => ({
-            kind: "raven",
-            name: r.name,
-            destination: r.destination,
-          }),
-        ),
-      ];
+    : input.sources.map((s): EntryDescriptor => ({ name: s.name, destination: s.destination }));
 
-  const byDest = new Map<string, { kind: "maester" | "raven"; name: string }>();
+  const byDest = new Map<string, { name: string }>();
   for (const entry of entries) {
     const dest = entry.destination
       ? resolve(repoRoot, entry.destination)
-      : defaultDestinationFor(repoRoot, entry.name);
+      : defaultDestinationFor(repoRoot, entry.name, baseDir);
     const prior = byDest.get(dest);
     if (prior) {
       throw new Error(
-        `${entry.kind} '${entry.name}' and ${prior.kind} '${prior.name}' both resolve to destination '${dest}'. Set a unique destination for one of them.`,
+        `sources '${entry.name}' and '${prior.name}' both resolve to destination '${dest}'. Set a unique destination for one of them.`,
       );
     }
-    byDest.set(dest, { kind: entry.kind, name: entry.name });
+    byDest.set(dest, { name: entry.name });
   }
 }

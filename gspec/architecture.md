@@ -29,8 +29,7 @@ This is a single-package, ESM-only Node.js library that ships a CLI binary. Ther
 | [CLI Banner](features/cli-banner.md) | `src/ui/components/banner.ts`. Reads palette tokens from `src/ui/theme/`. Gated on TTY + width + invocation context detected in `src/cli/main.ts`. |
 | [Citadel Initialization](features/citadel-initialization.md) | `src/cli/commands/init.ts` (interactive flow) + `src/core/config/` (write + validate citadel.yaml) + `src/core/repo/gitignore.ts`. |
 | [Maester Configuration](features/maester-configuration.md) | `src/cli/commands/publish.ts` (interactive flow) + `src/core/config/` (write + validate maester.yaml). No script scaffolding. |
-| [Maester Sync](features/maester-sync.md) | `src/cli/commands/sync.ts` calling `src/core/sync/runner.ts`, which dispatches each entry to its `src/core/sources/` fetcher and orchestrates `src/core/git/`, `src/core/auth/`, and `src/core/sync/stage.ts`. |
-| [Citadel Ravens](features/citadel-ravens.md) | `ravens` section in `src/schemas/citadel.ts`; raven-registration step in `src/cli/commands/init.ts`; `src/core/sources/raven.ts` — a `SourceFetcher` implementation that uses each entry's citadel-side `includes` list as the sparse-checkout pattern set (skipping the maester-side manifest-discovery step). |
+| [Maester Sync](features/maester-sync.md) | `src/cli/commands/sync.ts` calling `src/core/sync/runner.ts`, which calls `src/core/sources/fetcher.ts.fetchSource()` for each entry and orchestrates `src/core/git/`, `src/core/auth/`, and `src/core/sync/stage.ts`. The single fetcher branches internally on whether the source has a citadel-side `includes` list (skip remote-manifest discovery) or not (consult the remote's `maester.yaml`). |
 | [Citadel Base Directory](features/citadel-base-directory.md) | Optional top-level `baseDir` field in `src/schemas/citadel.ts`; `src/core/config/paths.ts` exposes a single `defaultDestinationFor(repoRoot, sourceName, baseDir)` chokepoint reused by `src/core/sync/runner.ts`, `src/core/init/finalize.ts`, and the `superRefine` collision check. `baseDir` prompt added to `src/cli/commands/init.ts`. |
 
 ---
@@ -68,12 +67,10 @@ maester/
 │   │   │   └── client.ts                # Typed simple-git facade (clone, fetch, checkout)
 │   │   ├── auth/
 │   │   │   └── resolver.ts              # Resolve env-var token references at runtime
-│   │   ├── sources/                     # Per-kind fetchers; each implements SourceFetcher
-│   │   │   ├── fetcher.ts               # SourceFetcher interface + shared FetchContext/FetchedTree types
-│   │   │   ├── maester.ts               # Maester fetcher: stage-1 fetches remote maester.yaml; uses its globs
-│   │   │   └── raven.ts                 # Raven fetcher: uses citadel-side `includes` directly (no stage-1)
+│   │   ├── sources/
+│   │   │   └── fetcher.ts               # Unified source fetcher + FetchContext/FetchedTree types. Branches on entry.includes: when set, uses them directly as the sparse-checkout pattern set; when unset, stage-1 fetches the remote maester.yaml and uses its globs.
 │   │   ├── sync/
-│   │   │   ├── runner.ts                # Orchestrate per-source fetch + stage + promote; dispatches by kind
+│   │   │   ├── runner.ts                # Orchestrate per-source fetch + stage + promote
 │   │   │   ├── stage.ts                 # Write-to-temp, then rename for atomic promote
 │   │   │   └── provenance.ts            # Read/write .maester-source.json marker
 │   │   └── errors.ts                    # Tagged error classes (ConfigError, AuthError, ...)
@@ -158,33 +155,22 @@ There is no database. The application's "data model" is the set of YAML configur
 
 ```mermaid
 erDiagram
-    CitadelConfig ||--o{ MaesterSource : "registers"
-    CitadelConfig ||--o{ RavenSource : "registers"
-    MaesterSource ||--o| AuthRef : "uses"
-    RavenSource ||--o| AuthRef : "uses"
-    MaesterSource ||--o| Destination : "writes to"
-    RavenSource ||--o| Destination : "writes to"
+    CitadelConfig ||--o{ Source : "registers"
+    Source ||--o| AuthRef : "uses"
+    Source ||--o| Destination : "writes to"
     Destination ||--|| ProvenanceMarker : "contains"
     MaesterConfig ||--o{ PublishedDocument : "declares"
 
     CitadelConfig {
-        string schemaVersion "literal: 2"
+        string schemaVersion "literal: 1"
         string baseDir "optional; default 'citadel'; repo-relative"
-        MaesterSource[] maesters "may be empty if ravens non-empty"
-        RavenSource[] ravens "may be empty if maesters non-empty"
+        Source[] sources "length >= 1"
     }
-    MaesterSource {
-        string name PK "unique across maesters + ravens"
+    Source {
+        string name PK "unique within citadel"
         string url "https or ssh git remote"
         string ref "branch/tag/sha; default = remote HEAD"
-        AuthRef auth "discriminated union"
-        string destination "optional override; repo-relative"
-    }
-    RavenSource {
-        string name PK "unique across maesters + ravens"
-        string url "https or ssh git remote"
-        string ref "branch/tag/sha; default = remote HEAD"
-        string[] includes "min 1; sparse-checkout pattern set"
+        string[] includes "optional; when set, min 1; bypasses remote manifest"
         AuthRef auth "discriminated union"
         string destination "optional override; repo-relative"
         string description "optional; surfaced in verbose output"
@@ -195,11 +181,10 @@ erDiagram
         string envVar "required if type=token; never the value"
     }
     Destination {
-        string path "default: citadel/<source.name>/"
+        string path "default: <baseDir>/<source.name>/"
         bool isManaged "true if marker present or empty"
     }
     ProvenanceMarker {
-        string kind "maester or raven"
         string sourceName
         string sourceUrl
         string ref
@@ -225,45 +210,32 @@ erDiagram
 
 | Field | Type | Constraints |
 |---|---|---|
-| `schemaVersion` | integer literal | Required. v2 sets `2`. The loader also accepts `schemaVersion: 1` documents and migrates them in memory (see §9 Gap 9). |
-| `baseDir` | string | Optional. Repo-relative path used as the parent folder for every entry whose `destination` is unset. Same shape rules as `MaesterSource.destination` (no leading `/`, no `..`, no whitespace-only). When omitted, behavior is identical to a literal value of `"citadel"`. Introduced by [Citadel Base Directory](features/citadel-base-directory.md). |
-| `maesters` | `MaesterSource[]` | Optional; defaults to `[]`. |
-| `ravens` | `RavenSource[]` | Optional; defaults to `[]`. |
+| `schemaVersion` | integer literal | Required. Current version is `1`. |
+| `baseDir` | string | Optional. Repo-relative path used as the parent folder for every entry whose `destination` is unset. Same shape rules as `Source.destination` (no leading `/`, no `..`, no whitespace-only). When omitted, behavior is identical to a literal value of `"citadel"`. Introduced by [Citadel Base Directory](features/citadel-base-directory.md). |
+| `sources` | `Source[]` | Optional; defaults to `[]`. |
 
 Cross-array invariants (enforced by a Zod `.superRefine` on the parsed document, not by individual field constraints):
 
-- The combined length of `maesters + ravens` must be ≥ 1. An empty citadel is rejected with an error pointing at the citadel root.
-- Every name (across both arrays combined) must be unique. A collision reports both colliding entries by name and kind.
-- Every resolved destination (`source.destination ?? \`${config.baseDir ?? "citadel"}/${source.name}\``) must be unique across both arrays combined. A collision reports both colliding entries.
+- `sources` must contain at least one entry. An empty citadel is rejected with an error pointing at the citadel root.
+- Every `name` must be unique within `sources`. A collision reports both colliding entries by name and index.
+- Every resolved destination (`source.destination ?? \`${config.baseDir ?? "citadel"}/${source.name}\``) must be unique. A collision reports both colliding entries.
 
-`zod` schema: `.strict()` — unknown top-level fields are rejected, surfacing typos as errors. Introduced by [Citadel Initialization](features/citadel-initialization.md); extended by [Citadel Ravens](features/citadel-ravens.md); consumed by [Maester Sync](features/maester-sync.md).
+`zod` schema: `.strict()` — unknown top-level fields are rejected, surfacing typos as errors. Introduced by [Citadel Initialization](features/citadel-initialization.md); consumed by [Maester Sync](features/maester-sync.md).
 
-#### MaesterSource (item inside `CitadelConfig.maesters`)
+#### Source (item inside `CitadelConfig.sources`)
 
 | Field | Type | Constraints |
 |---|---|---|
-| `name` | string | Required. Slug shape: `^[a-z0-9][a-z0-9-]*$`. Unique across the combined maesters + ravens namespace. |
-| `url` | string | Required. Must parse as `https://`, `ssh://`, or `git@host:path` form. No whitespace. |
+| `name` | string | Required. Slug shape: `^[a-z0-9][a-z0-9-]*$`. Unique within `sources`. |
+| `url` | string | Required. Must parse as `https://`, `ssh://`, `file://`, or `git@host:path` form. No whitespace. |
 | `ref` | string | Optional. When absent, the remote's default branch is used at sync time. |
+| `includes` | string[] | Optional. When present, length ≥ 1. Each entry is a repo-relative file path or `globby`-syntax glob; same shape validation as `PublishedDocument.path` (no leading `/`, no `..`, no whitespace-only entries). When set, the citadel owns the filter set and the remote `maester.yaml` is not consulted; when unset, sync looks for a `maester.yaml` manifest on the remote and uses its globs. |
 | `auth` | `AuthRef` | Optional; defaults to `{ type: "none" }`. |
 | `destination` | string | Optional. Repo-relative path. Validation: no leading `/`, no `..` segments, no symlinks. Default: `<baseDir>/<name>/` (where `baseDir` defaults to `citadel` — see `CitadelConfig.baseDir`). |
-
-Introduced by: [Citadel Initialization](features/citadel-initialization.md). Consumed by: [Maester Sync](features/maester-sync.md) via `src/core/sources/maester.ts`.
-
-#### RavenSource (item inside `CitadelConfig.ravens`)
-
-| Field | Type | Constraints |
-|---|---|---|
-| `name` | string | Required. Slug shape: `^[a-z0-9][a-z0-9-]*$`. Unique across the combined maesters + ravens namespace. |
-| `url` | string | Required. Same shape rules as `MaesterSource.url`. |
-| `ref` | string | Optional. When absent, the remote's default branch is used at sync time. |
-| `includes` | string[] | **Required.** Length ≥ 1. Each entry is a repo-relative file path or `globby`-syntax glob; same shape validation as `PublishedDocument.path` (no leading `/`, no `..`, no whitespace-only entries). |
-| `auth` | `AuthRef` | Optional; defaults to `{ type: "none" }`. Mechanism identical to `MaesterSource`. |
-| `destination` | string | Optional. Same shape rules as `MaesterSource.destination`. Default: `<baseDir>/<name>/` (where `baseDir` defaults to `citadel` — see `CitadelConfig.baseDir`). |
 | `description` | string | Optional. Free text; surfaced in `--verbose` output alongside the entry name. |
 | `tags` | string[] | Optional. Each tag is a slug (`^[a-z0-9][a-z0-9-]*$`). Surfaced in `--verbose` output. |
 
-Introduced by: [Citadel Ravens](features/citadel-ravens.md). Consumed by: [Maester Sync](features/maester-sync.md) via `src/core/sources/raven.ts`.
+Introduced by: [Citadel Initialization](features/citadel-initialization.md). Consumed by: [Maester Sync](features/maester-sync.md) via `src/core/sources/fetcher.ts`.
 
 #### AuthRef
 
@@ -276,7 +248,7 @@ The init walkthrough validates that the entered string looks like an env-var nam
 
 #### Destination (implicit, computed at sync time)
 
-Not a persisted entity. Computed per entry (maester or raven) as `entry.destination ?? path.join(repoRoot, config.baseDir ?? "citadel", entry.name)`. The single chokepoint is `defaultDestinationFor(repoRoot, sourceName, baseDir)` in `src/core/config/paths.ts`; every caller — sync runner, init finalizer, and the citadel `.superRefine` collision check — threads the parsed `config.baseDir` through this helper rather than hardcoding `"citadel"`. Sync refuses to write into a destination that contains content lacking a `ProvenanceMarker` (see Risk Mitigation in [maester-sync.md](features/maester-sync.md)). The destination uniqueness invariant on `CitadelConfig` (above) prevents two entries — of either kind — from claiming the same path.
+Not a persisted entity. Computed per source as `source.destination ?? path.join(repoRoot, config.baseDir ?? "citadel", source.name)`. The single chokepoint is `defaultDestinationFor(repoRoot, sourceName, baseDir)` in `src/core/config/paths.ts`; every caller — sync runner, init finalizer, and the citadel `.superRefine` collision check — threads the parsed `config.baseDir` through this helper rather than hardcoding `"citadel"`. Sync refuses to write into a destination that contains content lacking a `ProvenanceMarker` (see Risk Mitigation in [maester-sync.md](features/maester-sync.md)). The destination uniqueness invariant on `CitadelConfig` (above) prevents two sources from claiming the same path.
 
 Changing `baseDir` after a previous sync is non-destructive: the next run resolves new destinations under the new base and writes there. Any directories left behind under the previous base are not deleted, moved, or warned about — they are the user's responsibility to clean up. The destination-clobber guard is unaffected, because each managed directory carries its own `ProvenanceMarker`; the orphaned ones simply sit dormant.
 
@@ -284,15 +256,14 @@ Changing `baseDir` after a previous sync is non-destructive: the next run resolv
 
 | Field | Type | Constraints |
 |---|---|---|
-| `kind` | `"maester" \| "raven"` | Which kind produced the directory. |
 | `sourceName` | string | Matches the entry's `name` in citadel.yaml. |
 | `sourceUrl` | string | Redacted (no embedded token). |
 | `ref` | string | The ref the source was resolved to. |
 | `commitSha` | string | Full 40-char SHA. |
-| `filterSet` | string[] | The globs that produced this tree (resolved from a remote `maester.yaml` for maesters; copied from `includes` for ravens). Used on the next run to decide whether the sparse-checkout pattern set needs to change before a re-fetch. |
+| `filterSet` | string[] | The globs that produced this tree — resolved from a remote `maester.yaml` when no citadel-side `includes` is set, or copied from `source.includes` when it is. Used on the next run to decide whether the sparse-checkout pattern set needs to change before a re-fetch. |
 | `syncedAt` | ISO 8601 string | UTC. |
 
-Written atomically as the last step of a successful per-entry sync. Used by future runs to recognize "this directory is mine" before overwriting and to detect filter-set drift (a raven whose citadel-side `includes` changed between runs). Introduced by [Maester Sync](features/maester-sync.md) (P2 capability — built from day one because the destination-clobber guard needs it); extended by [Citadel Ravens](features/citadel-ravens.md) for `kind` and `filterSet`.
+Written atomically as the last step of a successful per-source sync. Used by future runs to recognize "this directory is mine" before overwriting and to detect filter-set drift (an includes-driven source whose `includes` changed between runs). Introduced by [Maester Sync](features/maester-sync.md) (P2 capability — built from day one because the destination-clobber guard needs it).
 
 #### MaesterConfig (`maester.yaml` at repo root)
 
@@ -301,7 +272,7 @@ Written atomically as the last step of a successful per-entry sync. Used by futu
 | `schemaVersion` | integer literal | Required. v1 sets `1`. |
 | `documents` | `PublishedDocument[]` | Required. Length ≥ 1. Paths unique. |
 
-`zod` schema: `.strict()`. Introduced by [Maester Configuration](features/maester-configuration.md); consumed at sync time by [Maester Sync](features/maester-sync.md) when a remote is itself a maester.
+`zod` schema: `.strict()`. Introduced by [Maester Configuration](features/maester-configuration.md); consumed at sync time by [Maester Sync](features/maester-sync.md) when a source has no citadel-side `includes` (manifest-driven mode).
 
 #### PublishedDocument
 
@@ -317,8 +288,8 @@ Introduced by: [Maester Configuration](features/maester-configuration.md).
 ### Relationship Notes
 
 - **No shared entities across roles.** A `CitadelConfig` and `MaesterConfig` can coexist in the same repo (both files at the root) but never reference each other inside the repo — the linkage happens *across* repos at sync time, when a citadel pulls a remote that itself has a `maester.yaml`.
-- **Maester and raven names share a single namespace.** `MaesterSource.name` and `RavenSource.name` are uniqueness-checked against each other so the slug can safely be used as a directory name (`citadel/<name>/`), a CLI argument (`maester sync foo bar`), and a result-table key regardless of kind. The same is true of resolved destinations — a maester and a raven cannot claim the same target directory.
-- **Schema versioning.** The citadel schema is at v2 (ravens added). The maester schema remains at v1. The loader (`src/core/config/loader.ts`) reads `schemaVersion` first and routes to the matching schema. v1 citadel documents (with a `sources:` field) are accepted and migrated in memory (see §9 Gap 9). Unknown versions are rejected with an error pointing at the upgrade path. Migrations live in `src/core/config/migrations/`. The optional top-level `baseDir` was added to v2 in-place rather than triggering a v3 bump — it is a backward-compatible additive field, and existing v2 documents that omit it continue to validate and behave identically to before.
+- **All source names share a single namespace.** Every entry in `CitadelConfig.sources` has a unique `name`, so the slug can safely be used as a directory name (`citadel/<name>/`), a CLI argument (`maester sync foo bar`), and a result-table key. The same is true of resolved destinations — two sources cannot claim the same target directory.
+- **Schema versioning.** Both the citadel schema and the maester (publish manifest) schema are at v1. The loader (`src/core/config/loader.ts`) reads `schemaVersion` first and rejects unknown versions with an error pointing at the upgrade path. The optional top-level `baseDir` is a backward-compatible additive field; configs that omit it continue to validate and behave identically.
 
 ---
 
@@ -330,7 +301,7 @@ Introduced by: [Maester Configuration](features/maester-configuration.md).
 // src/index.ts
 export { loadCitadelConfig, loadMaesterConfig } from "./core/config/loader.js";
 export { runSync } from "./core/sync/runner.js";
-export type { CitadelConfig, MaesterSource, RavenSource, AuthRef } from "./schemas/citadel.js";
+export type { CitadelConfig, Source, AuthRef } from "./schemas/citadel.js";
 export type { MaesterConfig, PublishedDocument } from "./schemas/maester.js";
 export type { SyncResult, SyncOutcome } from "./core/sync/runner.js";
 ```
@@ -380,7 +351,9 @@ The menu lives in `src/cli/menu.ts` and renders only when `process.stdout.isTTY`
 
 ### 6.2 Repository Discovery and Role Detection
 
-`src/core/repo/root.ts` finds the repo root by walking upward from `process.cwd()` for a `.git/` directory or a `package.json`, returning whichever is closer. Both walkthroughs and sync abort early with a structured error if no repo root is found.
+The repo root is always **`process.cwd()`** — the directory the user invoked the CLI from. `src/core/repo/root.ts` exposes `getRepoRoot(start = process.cwd())` which returns `{ path, hasGit, hasPackageJson }` describing what is (or isn't) present at that exact directory. It never walks upward and never returns `undefined`. The walk-up behavior was removed because it surprised users by writing `citadel.yaml` into an unintended ancestor directory when a stray `.git/` or `package.json` lived above the project they were actually working in. The cwd model is predictable: the file lands where you typed the command, full stop.
+
+`hasGit` and `hasPackageJson` are still surfaced because some downstream behavior depends on them (e.g. init wires `maester:sync` into `package.json` when present; without one it prints `no-package-json` instead). Neither marker is required for any command to run — the CLI does not refuse to operate on a directory that lacks them.
 
 `src/core/config/paths.ts` exposes:
 
@@ -389,7 +362,7 @@ type RepoRoles = { hasCitadel: boolean; hasMaester: boolean };
 function detectRoles(repoRoot: string): RepoRoles;
 ```
 
-The top-level menu, the banner gate, and the init "is this already a citadel?" check all read through `detectRoles`.
+The top-level menu, the banner gate, and the init "is this already a citadel?" check all read through `detectRoles` against the cwd-resolved path. An existing `citadel.yaml` in an ancestor directory is invisible to the cwd model — by design.
 
 ### 6.3 Service Layer (Domain Operations)
 
@@ -400,9 +373,9 @@ Each domain operation is a pure function (or a closely-related set of functions)
 | Config loader | `src/core/config/loader.ts` | YAML parse → zod validate → typed config. Throws `ConfigError` with file:line:column on failure. |
 | Config writer | `src/core/config/writer.ts` | Serialize typed config to YAML; preserve comments on rewrite via `eemeli/yaml` document model. |
 | Git client | `src/core/git/client.ts` | Thin typed wrapper over `simple-git`. Exposes `clone`, `fetch`, `resolveRef`, `worktreeCheckout`. Repository paths and refs are passed as discrete arguments — never string-interpolated. |
-| Auth resolver | `src/core/auth/resolver.ts` | Given an `AuthRef`, return either `{ type: "delegated" }` or `{ type: "token", value: string }` read from `process.env[authRef.envVar]`. Throws `AuthError` naming the missing variable. Used identically by both source kinds. |
-| Source fetchers | `src/core/sources/{fetcher.ts, maester.ts, raven.ts}` | One implementation per source kind behind a shared `SourceFetcher` interface. Each fetcher resolves its filter set (maester: remote `maester.yaml` globs; raven: citadel-side `includes`) and materializes the resulting tree into the cache directory. Returns a `FetchedTree { kind, name, rootDir, commitSha, filterSet, warnings }` that the runner promotes uniformly. |
-| Sync runner | `src/core/sync/runner.ts` | For each citadel entry: dispatch to the matching `SourceFetcher` → stage → promote → write provenance marker. Aggregates per-entry results, each labeled with its `kind`. Never throws on a single-entry failure; per-entry failures are returned as `SyncOutcome` values. |
+| Auth resolver | `src/core/auth/resolver.ts` | Given an `AuthRef`, return either `{ type: "delegated" }` or `{ type: "token", value: string }` read from `process.env[authRef.envVar]`. Throws `AuthError` naming the missing variable. |
+| Source fetcher | `src/core/sources/fetcher.ts` | A single `fetchSource(entry, ctx)` function that resolves a `FetchedTree { name, cacheDir, commitSha, filterSet, warnings }`. Branches internally on whether the source has `includes`: when set, uses them directly as the sparse-checkout pattern set; when unset, performs a manifest-discovery step against the remote's `maester.yaml` and uses its globs (failing the entry if absent or schema-invalid). |
+| Sync runner | `src/core/sync/runner.ts` | For each source: call `fetchSource` → stage → promote → write provenance marker. Aggregates per-source results. Never throws on a single-source failure; per-source failures are returned as `SyncOutcome` values. |
 | Staging | `src/core/sync/stage.ts` | Write all output to `<destination>.tmp-<rand>`, then `fs.rename` to the final destination. Old destination is removed under a temp name and unlinked after the rename succeeds. |
 | Provenance | `src/core/sync/provenance.ts` | Read/write `.maester-source.json` inside each destination directory. Validates `maesterName` matches before overwriting. |
 | Gitignore | `src/core/repo/gitignore.ts` | Append missing entries to `.gitignore`; never reorder or rewrite. Returns the set of lines that were added. |
@@ -413,7 +386,7 @@ Each domain operation is a pure function (or a closely-related set of functions)
 |---|---|
 | User's `git` binary | Wrapped by `simple-git` behind `src/core/git/client.ts`. Detected at startup; missing binary produces a clear, actionable error before any other work. |
 | npm registry | Publishing target only. No runtime calls. |
-| Google Drive / OneDrive / web URLs | Planned. To be added as additional `SourceFetcher` implementations under `src/core/sources/` (alongside `maester.ts` and `raven.ts`). Out of scope for v1. |
+| Google Drive / OneDrive / web URLs | Planned. To be added as additional fetcher implementations alongside `src/core/sources/fetcher.ts`. Out of scope for v1. |
 
 ### 6.5 Background Jobs / Events
 
@@ -427,7 +400,7 @@ sequenceDiagram
     participant CLI as src/cli/commands/sync.ts
     participant Runner as src/core/sync/runner.ts
     participant Loader as src/core/config/loader.ts
-    participant Fetcher as src/core/sources/{maester,raven}.ts
+    participant Fetcher as src/core/sources/fetcher.ts
     participant Git as src/core/git/client.ts
     participant Stage as src/core/sync/stage.ts
     participant FS as Filesystem
@@ -436,38 +409,38 @@ sequenceDiagram
     CLI->>Loader: loadCitadelConfig(repoRoot)
     Loader-->>CLI: CitadelConfig | throws ConfigError
     CLI->>Runner: runSync(config, { scope, concurrency })
-    loop For each entry in maesters + ravens (parallel, bounded)
-        Runner->>Fetcher: fetch(ctx)  [dispatched by entry.kind]
+    loop For each source (parallel, bounded)
+        Runner->>Fetcher: fetchSource(entry, ctx)
         Fetcher->>Git: partial clone / fetch into .maester/cache/<name>/
-        alt entry.kind == "maester"
+        alt entry.includes is set
+            Fetcher->>Fetcher: filter set = entry.includes
+        else
             Fetcher->>FS: stage-1 sparse-checkout maester.yaml
             FS-->>Fetcher: manifest bytes (or absent)
-            Fetcher->>Fetcher: parse → filter set (or full-tree fallback)
-        else entry.kind == "raven"
-            Fetcher->>Fetcher: filter set = citadel-side includes
+            Fetcher->>Fetcher: parse → filter set (fails the entry when absent or invalid)
         end
         Fetcher->>Git: stage-2 sparse-checkout(filter set) + checkout ref
         Git-->>Fetcher: resolved commit SHA + materialized tree
-        Fetcher-->>Runner: FetchedTree { kind, name, rootDir, commitSha, filterSet, warnings }
+        Fetcher-->>Runner: FetchedTree { name, cacheDir, commitSha, filterSet, warnings }
         Runner->>Stage: copy filtered tree to <destination>.tmp-XXXX
-        Stage->>FS: write provenance marker (kind + filterSet)
+        Stage->>FS: write provenance marker (filterSet)
         Stage->>FS: rename(.tmp-XXXX, destination) [atomic]
-        Stage-->>Runner: SyncOutcome { kind, added | updated | unchanged | failed }
+        Stage-->>Runner: SyncOutcome { added | updated | unchanged | failed }
     end
     Runner-->>CLI: SyncResult { outcomes[] }
-    CLI->>U: human-readable summary (grouped by kind) or JSON stream
+    CLI->>U: human-readable summary or JSON stream
 ```
 
 ### 6.7 Fetch Strategy (Partial Clone + Sparse Checkout)
 
-Sync never performs a plain `git clone <url>`. A plain clone transfers every blob in every tracked tree at the configured ref — wasteful when the citadel only consumes a small subset and, for maesters, incompatible with the trust model described in [maester-sync.md P1](features/maester-sync.md) (the maester owns its publish surface). Instead, every fetch resolves a **filter set** (a list of paths/globs) and uses partial-clone + sparse-checkout to materialize only the matching files. The two source kinds differ only in **where the filter set comes from**:
+Sync never performs a plain `git clone <url>`. A plain clone transfers every blob in every tracked tree at the configured ref — wasteful when the citadel only consumes a small subset and, in the manifest-driven mode, incompatible with the trust model described in [maester-sync.md P1](features/maester-sync.md) (the remote owns its publish surface). Instead, every fetch resolves a **filter set** (a list of paths/globs) and uses partial-clone + sparse-checkout to materialize only the matching files. The two source modes differ only in **where the filter set comes from**:
 
-| Kind | Filter set source | Stage-1 manifest-discovery step |
-|---|---|---|
-| Maester | The remote's own `maester.yaml`, fetched first via a manifest-discovery stage. If absent or schema-invalid, the entire tree is materialized (documented fallback). | Required. |
-| Raven | The citadel's own `ravens[<name>].includes` list, available immediately from the local config. The empty case is rejected at config-validation time, so the full-tree fallback never applies. | Skipped. |
+| Mode | Trigger | Filter set source | Stage-1 manifest-discovery step |
+|---|---|---|---|
+| Manifest-driven | `source.includes` is unset | The remote's own `maester.yaml`, fetched first via a manifest-discovery stage. If absent or schema-invalid, the entry is failed — sync never falls back to a full tree. | Required. |
+| Includes-driven | `source.includes` is set (length ≥ 1) | The citadel's own `source.includes` list, available immediately from the local config. The empty case is rejected at config-validation time. | Skipped. |
 
-The strategy is implemented per kind in `src/core/sources/maester.ts` and `src/core/sources/raven.ts`, both behind the `SourceFetcher` interface in `src/core/sources/fetcher.ts`. `src/core/git/client.ts` provides the specific git invocations both fetchers call. `src/core/sync/runner.ts` orchestrates the per-entry stage→promote pipeline.
+Both modes are implemented in `src/core/sources/fetcher.ts` (a single `fetchSource()` function with two branches). `src/core/git/client.ts` provides the specific git invocations the fetcher calls. `src/core/sync/runner.ts` orchestrates the per-source stage→promote pipeline.
 
 #### Stage 1 — Filter resolution
 
@@ -503,16 +476,16 @@ Effect: git lazily downloads exactly one blob — `maester.yaml` from the repo r
 | Outcome | Behavior in Stage 2 |
 |---|---|
 | File present, parses against the v1 maester schema | The set of `documents[].path` globs becomes the filter set. |
-| File present, schema-invalid | Logged as a non-fatal warning; falls back to "no manifest" behavior. |
-| File absent | Falls back to "no manifest" behavior. |
+| File present, schema-invalid | The entry fails with a `MAESTER_MANIFEST_INVALID` error. No Stage 2 occurs; other sources continue. |
+| File absent | The entry fails with a `MAESTER_MANIFEST_MISSING` error. No Stage 2 occurs; other sources continue. |
 
-"No manifest" behavior = the citadel consumes the full tree, since the maester has not declared a publish surface. This is the documented default in [maester-sync.md P1](features/maester-sync.md).
+A manifest-driven source whose remote does not publish a `maester.yaml` is treated as a configuration error rather than a "pull everything" signal — the contract is that the remote owns the publish surface, so an unspecified surface has no defined behavior. Consumers who want unfiltered content from such a source must add an `includes` list on the citadel side (switching the source to includes-driven mode). See [maester-sync.md P1](features/maester-sync.md).
 
-**Raven fetcher** (`src/core/sources/raven.ts`). The manifest-discovery checkout is skipped entirely — the filter set is `entry.includes`, already validated as non-empty at config-load time. The fetcher proceeds directly to Stage 2 with those globs in hand. No remote `maester.yaml` is fetched, parsed, or consulted, even if one exists on the raven's source repo — ravens are by definition unilateral.
+**Includes-driven branch.** When `entry.includes` is set, the manifest-discovery checkout is skipped entirely — the filter set is `entry.includes`, already validated as non-empty at config-load time. The fetcher proceeds directly to Stage 2 with those globs in hand. No remote `maester.yaml` is fetched, parsed, or consulted, even if one exists on the source repo — declaring `includes` is the citadel's way of taking authority over the filter set.
 
 #### Stage 2 — Selective checkout
 
-With the resolved filter set in hand, both kinds run the same selective-checkout pattern:
+With the resolved filter set in hand, both modes run the same selective-checkout pattern:
 
 ```sh
 git sparse-checkout set --no-cone -- \
@@ -525,18 +498,11 @@ git sparse-checkout set --no-cone -- \
 git checkout <ref>
 ```
 
-Or, when a maester falls back to a full tree:
-
-```sh
-git sparse-checkout disable
-git checkout <ref>
-```
-
-For ravens, the full-tree fallback never applies — `includes` is required and non-empty by schema. Pattern entries are passed as discrete argv elements (never string-interpolated) so glob metacharacters in include paths cannot escape the sparse-checkout flag.
+Pattern entries are passed as discrete argv elements (never string-interpolated) so glob metacharacters in include paths cannot escape the sparse-checkout flag. There is no full-tree code path: manifest-driven sources without a remote manifest fail in Stage 1, and includes-driven sources always have a non-empty `includes` list by schema.
 
 Either way, git fetches only the blobs that match the active checkout patterns. The cache directory's working tree now contains exactly the files that will be copied to the destination.
 
-**Zero-files-matched detection** (P1 in [Citadel Ravens](features/citadel-ravens.md)). After Stage 2 completes, the raven fetcher counts the files materialized in the working tree. A zero count attaches a structured warning (`{ kind: "raven", name, includes, matched: 0 }`) to the returned `FetchedTree`. The runner forwards the warning to the `SyncOutcome` and the output renderer — the run continues, the destination is left in a clean empty state, and exit status is unaffected. The same probe is harmless for maesters but the warning is suppressed there: a maester with zero published files is the maester maintainer's concern, not the citadel operator's.
+**Zero-files-matched detection** (P1 in [Maester Sync](features/maester-sync.md)). After Stage 2 completes for an includes-driven source, the fetcher counts the files materialized in the working tree. A zero count attaches a structured warning (`{ type: "no-matches", name, includes }`) to the returned `FetchedTree`. The runner forwards the warning to the `SyncOutcome` and the output renderer — the run continues, the destination is left in a clean empty state, and exit status is unaffected. The probe is suppressed for manifest-driven sources: a source repo whose `maester.yaml` publishes zero matching files is the source maintainer's concern, not the citadel operator's.
 
 #### Subsequent runs (cache already populated)
 
@@ -547,40 +513,40 @@ git -C .maester/cache/<entry.name> fetch --depth=1 origin <ref>
 git -C .maester/cache/<entry.name> reset --hard FETCH_HEAD
 ```
 
-Filter-set drift detection is kind-specific:
+Filter-set drift detection depends on the source mode:
 
-- **Maester.** If the remote `maester.yaml` is unchanged between runs (compared by blob SHA), Stage 2's sparse pattern set is reused as-is. If it changed, Stage 1's discovery step re-runs against the new tree before Stage 2.
-- **Raven.** The filter set lives in the citadel's local config. The fetcher compares the current `entry.includes` against the `filterSet` recorded in the destination's provenance marker. If they differ, Stage 2 re-runs with the new patterns. If they match, the previous sparse pattern set is reused.
+- **Manifest-driven.** If the remote `maester.yaml` is unchanged between runs (compared by blob SHA), Stage 2's sparse pattern set is reused as-is. If it changed, Stage 1's discovery step re-runs against the new tree before Stage 2.
+- **Includes-driven.** The filter set lives in the citadel's local config. The fetcher compares the current `source.includes` against the `filterSet` recorded in the destination's provenance marker. If they differ, Stage 2 re-runs with the new patterns. If they match, the previous sparse pattern set is reused.
 
-An entry of either kind is reported as `unchanged` when the fetched commit SHA matches the SHA recorded in the destination's provenance marker **and** the resolved filter set is unchanged — no blobs are downloaded beyond the manifest, no files are copied, no rename happens.
+A source is reported as `unchanged` when the fetched commit SHA matches the SHA recorded in the destination's provenance marker **and** the resolved filter set is unchanged — no blobs are downloaded beyond the manifest, no files are copied, no rename happens.
 
 #### Bandwidth and disk impact
 
 | Scenario | Blob transfer |
 |---|---|
-| Maester publishes `README.md` only (1 file) | 1 blob — the README — plus tree metadata. |
-| Maester publishes 30 files via globs | 30 blobs plus tree metadata. |
-| Maester has no `maester.yaml` | Full tree — same as a conventional clone at the configured ref. |
-| Raven with `includes: ["docs/**"]` matching 12 files | 12 blobs plus tree metadata. (No manifest fetch for ravens.) |
+| Manifest-driven source publishes `README.md` only (1 file) | 1 blob — the README — plus tree metadata. |
+| Manifest-driven source publishes 30 files via globs | 30 blobs plus tree metadata. |
+| Manifest-driven source with no remote `maester.yaml` | Stage 1 fails the source; no destination is written. |
+| Includes-driven source with `includes: ["docs/**"]` matching 12 files | 12 blobs plus tree metadata. (No manifest fetch — Stage 1 is skipped.) |
 | Re-sync, remote unchanged, filter set unchanged | 0 blobs. One `git fetch` round-trip that returns "up to date." |
 
-Disk: each entry's cache holds only the materialized files plus git's own metadata. The behavior is identical for both kinds — a raven publishing kilobytes occupies kilobytes, not the full repo size.
+Disk: each source's cache holds only the materialized files plus git's own metadata — a source publishing kilobytes occupies kilobytes, not the full repo size.
 
 #### Fallback for older `git`
 
-Partial clone (`--filter=blob:none`) requires `git ≥ 2.27` (May 2020). `src/core/git/client.ts` probes `git --version` at startup. On older binaries the runner falls back to a conventional `git clone --depth=1 <url>`, logs a `--verbose` notice naming the missing optimization, and proceeds — the trust model and final destination contents are identical for both kinds; only the bandwidth efficiency is lost.
+Partial clone (`--filter=blob:none`) requires `git ≥ 2.27` (May 2020). `src/core/git/client.ts` probes `git --version` at startup. On older binaries the runner falls back to a conventional `git clone --depth=1 <url>`, logs a `--verbose` notice naming the missing optimization, and proceeds — the trust model and final destination contents are identical; only the bandwidth efficiency is lost.
 
 #### Who owns the filter set, and why
 
-It would be technically straightforward to let `citadel.yaml` declare its own `paths:` filter per maester and apply that filter on the citadel side. The architecture deliberately omits this for maesters. The maester is the authority on what it publishes; a citadel-side override would let a citadel operator pull files the maester did not include in its manifest — defeating the publish-surface contract in [maester-configuration.md](features/maester-configuration.md) §3. If a citadel needs a narrower view than a maester offers, that is a conversation to have with the maester's maintainers, not a config toggle.
+It would be technically straightforward to let `citadel.yaml` always override the remote's `maester.yaml` with its own `paths:` filter. The architecture deliberately does not allow that *layering*: when a source is manifest-driven (no citadel-side `includes`), the remote is the sole authority on what it publishes. A citadel-side override on top of the manifest would let a citadel operator pull files the remote did not include — defeating the publish-surface contract in [maester-configuration.md](features/maester-configuration.md) §3. If a citadel needs a narrower view than a manifest offers, that is a conversation to have with the source repo's maintainers, not a config toggle.
 
-Ravens deliberately invert this contract. The raven's source has no manifest and no opinion about what it publishes, so the citadel **must** declare what to pull — `includes` is required and authoritative. The trade-off is upkeep: when the raven's source repo restructures, the citadel's `includes` may need to be updated, and the P1 zero-files-matched warning is the architecture's tripwire for that case. That upkeep cost is intrinsic to consuming a source that did not opt into the publish-surface contract; it is not a defect, and there is no design lever that reduces it without giving up the contract itself.
+The includes-driven mode deliberately inverts this contract: the source has no manifest and no opinion about what it publishes, so the citadel **must** declare what to pull — `includes` is authoritative and `maester.yaml` (if any) is ignored. The trade-off is upkeep: when the source repo restructures, the citadel's `includes` may need to be updated, and the P1 zero-files-matched warning is the architecture's tripwire for that case. That upkeep cost is intrinsic to consuming a source that did not opt into the publish-surface contract; it is not a defect, and there is no design lever that reduces it without giving up the contract itself.
 
 ---
 
 ## 7. Authentication & Authorization Architecture
 
-The application has no in-process authorization layer. It operates with the invoking user's filesystem permissions and the credentials their environment grants to outbound git operations. The *only* authentication surface is the auth attached to each `MaesterSource` and each `RavenSource` — both use the same `AuthRef` discriminated union, the same env-var resolution path, and the same redaction rules.
+The application has no in-process authorization layer. It operates with the invoking user's filesystem permissions and the credentials their environment grants to outbound git operations. The *only* authentication surface is the auth attached to each `Source` — every source uses the same `AuthRef` discriminated union, the same env-var resolution path, and the same redaction rules, regardless of whether the source is manifest-driven or includes-driven.
 
 ### Auth modes
 
@@ -663,35 +629,34 @@ The citadel-init walkthrough enforces the "name, not value" rule with both copy 
 # citadel.yaml
 #
 # This file declares the remote knowledge sources this repository pulls into
-# a local destination directory. Two kinds of sources are supported:
+# a local destination directory.
 #
-#   * maesters — repositories that publish their own `maester.yaml` declaring
-#     what they make available. The citadel consumes whatever the maester
-#     publishes; the maester owns the publish surface.
-#   * ravens — git repositories the citadel pulls from without any manifest
-#     on the remote side. The citadel itself declares the `includes` list of
-#     paths/globs to materialize. Use ravens for public third-party repos or
-#     private repos you have read access to but do not own.
+# Each source is a git repository. By default, the citadel fetches whatever
+# the source publishes in its own `maester.yaml` manifest (the source repo
+# owns the publish surface). If a source does not publish a manifest — or
+# you want to override what gets pulled — declare an `includes` list on the
+# source and the citadel will materialize exactly those paths or globs
+# instead (the citadel owns the filter set).
 #
 # By default, every source is surfaced at `<baseDir>/<source-name>/` from the
 # repository root. The optional top-level `baseDir` field below changes that
 # parent folder once for every source; when omitted, the default is `citadel`.
 # A per-source `destination` always wins over the configured base.
 #
-# Run `maester sync` (or `npm run maester:sync`) to refresh both kinds in
+# Run `maester sync` (or `npm run maester:sync`) to refresh every source in
 # one pass. Generated by `npx maester init` and safe to commit. Secret
 # values are never stored here — only the names of environment variables
 # that hold them.
 
-schemaVersion: 2
+schemaVersion: 1
 
 # Optional. Parent folder for every source that does not set its own
 # `destination` override. Omit (or set to `citadel`) to keep the default.
 # Repo-relative path; leading slashes and `..` segments are rejected.
 # baseDir: vendor
 
-maesters:
-  # Public repository on its default branch.
+sources:
+  # Manifest-driven: the remote publishes its own maester.yaml.
   # No `auth` block means delegated auth — uses your local git credentials
   # (SSH keys, credential helper, gh auth, etc.). No `ref` means the remote's
   # default branch is used.
@@ -714,26 +679,25 @@ maesters:
       type: token
       envVar: MAESTER_PLAYBOOKS_TOKEN
 
-  # Private repository over SSH (token auth not applicable). The user's
-  # local SSH agent / keys are used by the underlying git binary.
+  # Private repository over SSH. The user's local SSH agent / keys are used
+  # by the underlying git binary.
   - name: architecture-notes
     url: git@github.com:example-org/architecture-notes.git
     ref: main
 
-  # A maester with a custom destination override. By default, content is
-  # surfaced at `<baseDir>/<name>/`; this one is redirected to `vendor/tokens/`
-  # instead, regardless of what `baseDir` is set to. The override is
-  # repo-relative; leading slashes and `..` segments are rejected.
+  # Custom destination override. By default, content is surfaced at
+  # `<baseDir>/<name>/`; this one is redirected to `vendor/tokens/` regardless
+  # of what `baseDir` is set to. The override is repo-relative; leading
+  # slashes and `..` segments are rejected.
   - name: design-tokens
     url: https://github.com/example-org/design-tokens.git
     ref: release/2026.05
     destination: vendor/tokens
 
-ravens:
-  # Pull a third-party public repo's docs into citadel/react-docs/.
-  # Because the source publishes no maester.yaml, the citadel owns the
-  # `includes` list. Update it if the upstream repo restructures — the
-  # P1 "no files matched" warning will surface drift on the next sync.
+  # Includes-driven: a third-party public repo with no maester.yaml.
+  # The citadel owns the `includes` list. Update it if the upstream repo
+  # restructures — the "no files matched" warning will surface drift on the
+  # next sync.
   - name: react-docs
     url: https://github.com/facebook/react.git
     ref: main
@@ -742,8 +706,8 @@ ravens:
       - README.md
     description: Upstream React documentation snapshot.
 
-  # Pull a private vendor repo you have read access to but do not own.
-  # Same env-var-name auth pattern as a private maester.
+  # Includes-driven private vendor repo you have read access to but do not own.
+  # Same env-var-name auth pattern as any other private source.
   - name: vendor-api-spec
     url: https://github.com/example-vendor/api.git
     ref: release/v3
@@ -911,7 +875,7 @@ The following gaps were found in the feature PRDs during architecture design. Ea
 
 **Why it matters.** Implementing P1 requires a path inside the fetched remote where the manifest lives and a behavior when it's absent.
 
-**Resolution.** The remote's `maester.yaml` lives at the root of the resolved tree and is discovered as part of the fetch strategy in §6.7. If present and `zod`-valid against the v1 maester schema, the listed `documents[].path` globs become the sparse-checkout pattern set. If absent, sync materializes the full tree (the documented default). If present but schema-invalid, a non-fatal warning is logged for that source and the run falls back to the full-tree default. See §6.7 for the full fetch sequence and the citadel-cannot-override rationale.
+**Resolution.** When a source has no citadel-side `includes`, the remote's `maester.yaml` lives at the root of the resolved tree and is discovered as part of the fetch strategy in §6.7. If present and `zod`-valid against the v1 maester schema, the listed `documents[].path` globs become the sparse-checkout pattern set. If absent or schema-invalid, the entry fails with a typed `MaesterError` (`MAESTER_MANIFEST_MISSING` / `MAESTER_MANIFEST_INVALID`) — sync never falls back to materializing the full tree, because doing so would silently ignore the source repo's role as owner of the publish surface. Consumers who want unfiltered content from such a source must add an `includes` list on the citadel side (switching the source to includes-driven mode). See §6.7 for the full fetch sequence and the citadel-cannot-override rationale.
 
 #### Gap 8 — Sync of a non-existent remote ref
 
@@ -919,85 +883,82 @@ The following gaps were found in the feature PRDs during architecture design. Ea
 
 **Why it matters.** This is a routine misconfiguration (typoed branch name) that must produce a clear, single-source failure rather than crash the runner.
 
-**Resolution.** `src/core/git/client.ts.resolveRef()` is the single chokepoint; if the ref cannot be resolved, it throws a typed `RefNotFoundError`. The runner catches this and marks the entry as `failed` with the message "ref `<ref>` not found on `<url>`". No other entries are affected. Exit code is non-zero as required by P0. Applies uniformly to maesters and ravens.
+**Resolution.** `src/core/git/client.ts.resolveRef()` is the single chokepoint; if the ref cannot be resolved, it throws a typed `RefNotFoundError`. The runner catches this and marks the source as `failed` with the message "ref `<ref>` not found on `<url>`". No other sources are affected. Exit code is non-zero as required by P0. Applies uniformly regardless of whether the source is manifest-driven or includes-driven.
 
-#### Gap 9 — Citadel schema field naming and version bump
+#### Gap 9 — Citadel schema field naming
 
-**What's missing.** The original v1 citadel schema named its single array `sources: MaesterSource[]`. The [Citadel Ravens](features/citadel-ravens.md) PRD frames the new section as "alongside the existing maesters section," implying a rename, and requires older configs to remain readable.
+**What's missing.** The citadel needs a YAML shape that covers both modes of source (manifest-driven and includes-driven) without forcing the user to label which mode a source is in.
 
-**Why it matters.** Determines the user-facing YAML shape, the schema version number, and the loader's migration logic. A wrong choice here either breaks any pre-release `citadel.yaml` already committed to a user's branch or leaves the YAML permanently asymmetric.
+**Why it matters.** Two parallel top-level arrays (one per mode) would force the user to make a labeling decision before reaching the actual differences between the modes — a UX cost paid for an artificial taxonomy.
 
-**Resolution.** (User-confirmed.) The v2 schema renames `sources` to `maesters` and adds `ravens` as a second top-level array, giving `maesters:` and `ravens:` as a symmetric pair. New configs always write `schemaVersion: 2`. The loader still accepts `schemaVersion: 1` documents: when it sees `schemaVersion: 1`, it parses against a small `CitadelV1` schema (with `sources` instead of `maesters`) and migrates the result in memory to the v2 shape (`maesters = sources`, `ravens = []`) before the `superRefine` invariants run. The migration is non-destructive — `loadCitadelConfig` returns a v2-shaped object; only `saveCitadelConfig` writes back, and it always writes v2.
+**Resolution.** (User-confirmed.) The citadel schema has a single top-level `sources:` array. Each entry is a `Source` (same TypeScript type for every source). The mode is implicit from whether the entry declares an `includes` list:
 
-#### Gap 10 — Source-kind abstraction
+- `includes` unset → manifest-driven (the remote's `maester.yaml` governs).
+- `includes` set (length ≥ 1) → includes-driven (the citadel governs; the remote `maester.yaml` is ignored even if present).
 
-**What's missing.** The original architecture had `src/core/sync/runner.ts` handling the full per-maester fetch pipeline inline. Adding ravens introduces a second kind whose stage-1 step differs, and the architecture's own forward-looking note (Google Drive, OneDrive, web URLs) already anticipated additional kinds.
+Schema version is `1`. There is no prior release, so no backward-compatibility logic is required.
 
-**Why it matters.** Determines how cleanly the implementing agent can add a new source kind later, and how testable each kind is in isolation.
+#### Gap 10 — Source fetcher abstraction
 
-**Resolution.** (User-confirmed.) Introduce `src/core/sources/` with one module per kind (`maester.ts`, `raven.ts`), both implementing a shared `SourceFetcher` interface defined in `src/core/sources/fetcher.ts`. The interface shape:
+**What's missing.** `src/core/sync/runner.ts` should not embed the full fetch pipeline inline, because the manifest-driven and includes-driven paths share most of their behavior but diverge on Stage 1, and the architecture's forward-looking note (Google Drive, OneDrive, web URLs) anticipates additional non-git source kinds in the future.
+
+**Why it matters.** Determines how cleanly the implementing agent can add a new source kind later, and how testable each branch is in isolation.
+
+**Resolution.** A single module `src/core/sources/fetcher.ts` exports `fetchSource(entry, ctx)` which branches internally on `entry.includes`. The function returns:
 
 ```ts
 type FetchContext = {
-  entry: MaesterSource | RavenSource;
   cacheDir: string;          // .maester/cache/<name>/
-  resolveAuth: (auth: AuthRef) => Promise<ResolvedAuth>;
-  git: GitClient;
+  cacheExists: boolean;
+  tokenForUrl: string | undefined;
 };
 
 type FetchedTree = {
-  kind: "maester" | "raven";
   name: string;
-  rootDir: string;           // cache working tree path
+  cacheDir: string;
   commitSha: string;
-  filterSet: string[];       // globs that produced this tree
-  warnings: FetchWarning[];  // e.g. zero-files-matched, schema-invalid manifest
+  filterSet: readonly string[]; // globs that produced this tree
+  warnings: FetchWarning[];     // e.g. zero-files-matched
 };
-
-interface SourceFetcher {
-  readonly kind: "maester" | "raven";
-  fetch(ctx: FetchContext): Promise<FetchedTree>;
-}
 ```
 
-The runner becomes a thin orchestrator: select fetcher by `entry.kind`, call `fetch`, then stage → promote → write provenance. The previously-planned `src/core/sync/filters.ts` is removed — its logic is absorbed into `src/core/sources/maester.ts`, which is the only module that ever reads a remote `maester.yaml`.
+The runner becomes a thin orchestrator: call `fetchSource(entry, ctx)`, then stage → promote → write provenance. Future non-git source kinds will be added alongside this fetcher (e.g. `src/core/sources/http.ts`) and dispatched by a field on the source entry.
 
-#### Gap 11 — Shared namespace and destination collision enforcement
+#### Gap 11 — Name and destination collision enforcement
 
-**What's missing.** The PRD requires raven names to be unique within the combined maesters + ravens set, and forbids destination collisions across both kinds. The enforcement point is not specified.
+**What's missing.** All source names must be unique within a citadel, and destinations must not collide. The enforcement point must be a single chokepoint.
 
-**Why it matters.** Without a single chokepoint, name and destination collisions could pass schema parsing only to surface as confusing failures during sync (overwriting the wrong directory, ambiguous CLI scoping).
+**Why it matters.** Without a single chokepoint, collisions could pass schema parsing only to surface as confusing failures during sync (overwriting the wrong directory, ambiguous CLI scoping).
 
 **Resolution.** Both invariants are enforced at config-validation time via a Zod `.superRefine` on `CitadelConfig`, before the loader hands a parsed value to any downstream caller. The refinement:
 
-1. Builds the combined entries list (`[...maesters.map(m => ({ kind: "maester", ...m })), ...ravens.map(r => ({ kind: "raven", ...r }))]`).
-2. Asserts each `name` appears exactly once. A duplicate reports both colliding entries by name and kind, pointing at the offending YAML lines via Zod's `addIssue`.
-3. Asserts each resolved destination (`entry.destination ?? \`${config.baseDir ?? "citadel"}/${entry.name}\``) appears exactly once. A duplicate reports both colliding entries. The refinement reads `config.baseDir` from the parsed document so the collision check operates on the same resolved path that sync will write to.
-4. Asserts the combined length is ≥ 1. An empty citadel is rejected.
+1. Asserts each `source.name` appears exactly once in `sources`. A duplicate reports both colliding entries by name and index via Zod's `addIssue`.
+2. Asserts each resolved destination (`source.destination ?? \`${config.baseDir ?? "citadel"}/${source.name}\``) appears exactly once. A duplicate reports both colliding entries. The refinement reads `config.baseDir` from the parsed document so the collision check operates on the same resolved path that sync will write to.
+3. Asserts `sources.length ≥ 1`. An empty citadel is rejected.
 
 The init walkthrough runs the same validator before writing the file so collisions are caught at config-time, not sync-time.
 
-#### Gap 12 — Zero-files-matched detection for ravens
+#### Gap 12 — Zero-files-matched detection
 
-**What's missing.** [Citadel Ravens P1](features/citadel-ravens.md) requires a "no files matched includes" warning. The detection point and effect on the run are not specified.
+**What's missing.** [Maester Sync P1](features/maester-sync.md) requires a "no files matched includes" warning for includes-driven sources. The detection point and effect on the run must be specified.
 
-**Why it matters.** Determines whether a drifted raven fails its entry (too noisy — the destination is still in a consistent state), silently produces an empty directory (too quiet — the user can't tell something broke), or warns and continues.
+**Why it matters.** Determines whether a drifted source fails outright (too noisy — the destination is still in a consistent state), silently produces an empty directory (too quiet — the user can't tell something broke), or warns and continues.
 
-**Resolution.** Detection happens inside `src/core/sources/raven.ts` after Stage 2 completes: the fetcher counts files materialized in the working tree. A zero count attaches a structured `FetchWarning` to the returned `FetchedTree`. The runner forwards the warning to the per-entry `SyncOutcome`, the human-readable renderer (one styled WARN line per warned entry), and the `--json` stream (the warning is a field on the entry's outcome object). Status remains the standard `added/updated/unchanged`; "no files matched" is a warning, not a failure, and exit code is unaffected.
+**Resolution.** Detection happens inside `src/core/sources/fetcher.ts` after Stage 2 completes, only for includes-driven sources: the fetcher counts files materialized in the working tree. A zero count attaches a structured `FetchWarning` (`{ type: "no-matches", name, includes }`) to the returned `FetchedTree`. The runner forwards the warning to the per-source `SyncOutcome`, the human-readable renderer (one styled WARN line per warned source), and the `--json` stream (the warning is a field on the source's outcome object). Status remains the standard `added/updated/unchanged`; "no files matched" is a warning, not a failure, and exit code is unaffected.
 
-#### Gap 13 — Sparse-checkout pattern shape and validation for ravens
+#### Gap 13 — Sparse-checkout pattern shape and validation
 
-**What's missing.** The raven `includes` field needs a defined glob syntax and a shape validator.
+**What's missing.** The `includes` field on a source needs a defined glob syntax and a shape validator.
 
 **Why it matters.** Determines what patterns users can write and where invalid patterns are rejected. Inconsistent validation between init and sync would let bad patterns persist past commit.
 
-**Resolution.** `includes` entries use the **same shape and validation** as `PublishedDocument.path` (defined in `src/schemas/maester.ts`): repo-relative, no leading `/`, no `..` segments, no whitespace-only entries, `globby` glob syntax. The shape validator is extracted into a shared `repoRelativePathSchema` in `src/schemas/common.ts` and reused by both schemas. At sync time, the resolved `includes` are passed to `simple-git`'s `sparseCheckout` API as a discrete argv array (never string-interpolated into a shell command), so glob metacharacters in patterns cannot escape the flag.
+**Resolution.** `includes` entries use the **same shape and validation** as `PublishedDocument.path` (defined in `src/schemas/maester.ts`): repo-relative, no leading `/`, no `..` segments, no whitespace-only entries, `globby` glob syntax. At sync time, the resolved `includes` are passed to git's sparse-checkout flag as discrete argv elements (never string-interpolated into a shell command), so glob metacharacters in patterns cannot escape the flag.
 
-#### Gap 14 — Raven destinations default to `<baseDir>/<name>/`
+#### Gap 14 — Source destinations default to `<baseDir>/<name>/`
 
-**What's missing.** The PRD says ravens land in `<baseDir>/<raven-name>/` by default (where `baseDir` defaults to `citadel`). This is identical to the maester default — worth recording as a single chokepoint rather than letting the implementation accidentally diverge.
+**What's missing.** Every source — manifest-driven or includes-driven — lands in `<baseDir>/<source-name>/` by default (where `baseDir` defaults to `citadel`). Worth recording as a single chokepoint rather than letting the implementation accidentally diverge.
 
-**Resolution.** The destination-resolution helper in `src/core/config/paths.ts` is `defaultDestinationFor(repoRoot, sourceName, baseDir)`. It accepts any entry shaped as `{ name: string; destination?: string }` and is reused by both kinds, with the parsed `config.baseDir` (or its `"citadel"` default) threaded through by every caller — sync runner, init finalizer, and the citadel `.superRefine` collision check. The shared-namespace invariant (Gap 11) prevents two entries — even one maester and one raven with the same name — from claiming the same path: the schema rejects them at parse time. There is no per-kind logic.
+**Resolution.** The destination-resolution helper in `src/core/config/paths.ts` is `defaultDestinationFor(repoRoot, sourceName, baseDir)`. It accepts any entry shaped as `{ name: string; destination?: string }` and is reused by every caller, with the parsed `config.baseDir` (or its `"citadel"` default) threaded through — sync runner, init finalizer, and the citadel `.superRefine` collision check. The shared-namespace invariant (Gap 11) prevents two sources from claiming the same path: the schema rejects them at parse time. There is no mode-specific logic.
 
 #### Gap 15 — Configurable citadel base directory
 
@@ -1007,7 +968,7 @@ The init walkthrough runs the same validator before writing the file so collisio
 
 **Resolution.** (User-confirmed.)
 
-1. **Schema shape.** `baseDir` is added to `CitadelConfigSchema` (v2) as an optional, repo-relative string with the same shape validation as `MaesterSource.destination` (no leading `/`, no `..`, no whitespace-only). No schema version bump — the field is purely additive, and existing v2 configs that omit it continue to validate and behave identically.
+1. **Schema shape.** `baseDir` is an optional, repo-relative string with the same shape validation as `Source.destination` (no leading `/`, no `..`, no whitespace-only). Configs that omit it continue to validate and behave identically to a literal value of `"citadel"`.
 2. **Single chokepoint.** `defaultDestinationFor(repoRoot, sourceName, baseDir)` in `src/core/config/paths.ts` is the only place that computes a default destination. It applies `baseDir ?? "citadel"` internally so callers can pass through whatever the parsed config has without their own `??` fallback. Every caller — `src/core/sync/runner.ts`, `src/core/init/finalize.ts`, and the citadel `.superRefine` — threads the parsed `config.baseDir` through this helper.
 3. **Init-time prompt.** The citadel-init walkthrough adds one prompt for the base directory, pre-filled with `citadel` and validated against the same shape rule as the schema. When the user accepts the default, init **omits** the field from the generated YAML — accepting the default produces a config indistinguishable from today's, minimizing the diff against pre-existing projects. When the user enters anything else, init writes the explicit `baseDir:` line.
 4. **Non-destructive change.** If the user later edits `baseDir` and re-syncs, the runner writes to the newly-resolved destinations. Directories under the previous base are left in place — no deletion, no move, no warning. The destination-clobber guard remains intact because each managed directory still owns its `ProvenanceMarker`; orphaned ones are inert.

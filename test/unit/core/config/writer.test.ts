@@ -13,32 +13,65 @@ afterEach(async () => {
 });
 
 describe("writeCitadelConfig", () => {
-  it("writes a citadel.yaml with the documented header comment and v2 fields", async () => {
+  it("writes a citadel.yaml with the documented header comment and sources field", async () => {
     const path = await writeCitadelConfig(repo.path, {
-      schemaVersion: 2,
-      maesters: [{ name: "design-system", url: "https://example.com/d.git" }],
-      ravens: [],
+      schemaVersion: 1,
+      sources: [{ name: "design-system", url: "https://example.com/d.git" }],
     });
     const text = await readFile(path, "utf8");
     expect(text).toContain("# citadel.yaml");
     expect(text).toContain("design-system");
-    expect(text).toContain("schemaVersion: 2");
-    expect(text).toContain("maesters:");
-    expect(text).toContain("ravens:");
+    expect(text).toContain("schemaVersion: 1");
+    expect(text).toContain("sources:");
   });
 
-  it("round-trips a citadel with both maesters and ravens through loadCitadelConfig", async () => {
+  it("documents baseDir in the header comment", async () => {
+    const path = await writeCitadelConfig(repo.path, {
+      schemaVersion: 1,
+      sources: [{ name: "x", url: "https://example.com/r.git" }],
+    });
+    const text = await readFile(path, "utf8");
+    expect(text).toContain("baseDir");
+    expect(text).toContain("citadel");
+  });
+
+  it("emits baseDir between schemaVersion and sources when set", async () => {
+    const path = await writeCitadelConfig(repo.path, {
+      schemaVersion: 1,
+      baseDir: "vendor",
+      sources: [{ name: "x", url: "https://example.com/r.git" }],
+    });
+    const text = await readFile(path, "utf8");
+    const versionIdx = text.indexOf("schemaVersion:");
+    const baseIdx = text.indexOf("baseDir:");
+    const sourcesIdx = text.indexOf("sources:");
+    expect(versionIdx).toBeGreaterThan(-1);
+    expect(baseIdx).toBeGreaterThan(versionIdx);
+    expect(sourcesIdx).toBeGreaterThan(baseIdx);
+
+    const loaded = await loadCitadelConfig(repo.path);
+    expect(loaded.baseDir).toBe("vendor");
+  });
+
+  it("omits baseDir entirely when undefined", async () => {
+    const path = await writeCitadelConfig(repo.path, {
+      schemaVersion: 1,
+      sources: [{ name: "x", url: "https://example.com/r.git" }],
+    });
+    const text = await readFile(path, "utf8");
+    expect(text).not.toMatch(/^baseDir:/m);
+  });
+
+  it("round-trips a mixed citadel through loadCitadelConfig", async () => {
     await writeCitadelConfig(repo.path, {
-      schemaVersion: 2,
-      maesters: [
+      schemaVersion: 1,
+      sources: [
         { name: "alpha", url: "https://example.com/a.git", ref: "main" },
         {
           name: "beta",
           url: "https://example.com/b.git",
           auth: { type: "token", envVar: "MAESTER_BETA_TOKEN" },
         },
-      ],
-      ravens: [
         {
           name: "vendor-docs",
           url: "https://example.com/v.git",
@@ -49,11 +82,10 @@ describe("writeCitadelConfig", () => {
       ],
     });
     const loaded = await loadCitadelConfig(repo.path);
-    expect(loaded.maesters).toHaveLength(2);
-    expect(loaded.maesters[1]?.auth).toEqual({ type: "token", envVar: "MAESTER_BETA_TOKEN" });
-    expect(loaded.ravens).toHaveLength(1);
-    expect(loaded.ravens[0]?.includes).toEqual(["openapi/**/*.yaml", "CHANGELOG.md"]);
-    expect(loaded.ravens[0]?.tags).toEqual(["api", "vendor"]);
+    expect(loaded.sources).toHaveLength(3);
+    expect(loaded.sources[1]?.auth).toEqual({ type: "token", envVar: "MAESTER_BETA_TOKEN" });
+    expect(loaded.sources[2]?.includes).toEqual(["openapi/**/*.yaml", "CHANGELOG.md"]);
+    expect(loaded.sources[2]?.tags).toEqual(["api", "vendor"]);
   });
 });
 

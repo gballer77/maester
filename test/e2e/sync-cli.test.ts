@@ -46,37 +46,41 @@ afterEach(async () => {
 
 describe("CLI: maester sync", () => {
   it("syncs configured sources and exits 0", async () => {
-    const remote = await createBareRemote({ files: [{ path: "README.md", contents: "ok\n" }] });
+    const remote = await createBareRemote({
+      files: [
+        { path: "maester.yaml", contents: "schemaVersion: 1\ndocuments:\n  - path: README.md\n" },
+        { path: "README.md", contents: "ok\n" },
+      ],
+    });
     remotes.push(remote);
     await writeCitadelConfig(repo.path, {
-      schemaVersion: 2,
-      maesters: [{ name: "alpha", url: toFileUrl(remote.bareRepoUrl), ref: "main" }],
-      ravens: [],
+      schemaVersion: 1,
+      sources: [{ name: "alpha", url: toFileUrl(remote.bareRepoUrl), ref: "main" }],
     });
     const result = await runCli(["sync"], repo.path);
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain("[maester] alpha");
+    expect(result.stdout).toContain("alpha");
     expect(existsSync(resolve(repo.path, "citadel/alpha/README.md"))).toBe(true);
   }, 30_000);
 
-  it("labels maester and raven outcomes in human output", async () => {
-    const maesterRemote = await createBareRemote({
+  it("renders manifest-driven and includes-driven sources together in human output", async () => {
+    const manifestRemote = await createBareRemote({
       files: [
         { path: "maester.yaml", contents: "schemaVersion: 1\ndocuments:\n  - path: README.md\n" },
         { path: "README.md", contents: "# m\n" },
       ],
     });
-    const ravenRemote = await createBareRemote({
+    const includesRemote = await createBareRemote({
       files: [{ path: "README.md", contents: "# r\n" }],
     });
-    remotes.push(maesterRemote, ravenRemote);
+    remotes.push(manifestRemote, includesRemote);
     await writeCitadelConfig(repo.path, {
-      schemaVersion: 2,
-      maesters: [{ name: "alpha-m", url: toFileUrl(maesterRemote.bareRepoUrl), ref: "main" }],
-      ravens: [
+      schemaVersion: 1,
+      sources: [
+        { name: "alpha-m", url: toFileUrl(manifestRemote.bareRepoUrl), ref: "main" },
         {
           name: "beta-r",
-          url: toFileUrl(ravenRemote.bareRepoUrl),
+          url: toFileUrl(includesRemote.bareRepoUrl),
           ref: "main",
           includes: ["README.md"],
         },
@@ -84,20 +88,19 @@ describe("CLI: maester sync", () => {
     });
     const result = await runCli(["sync"], repo.path);
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain("[maester] alpha-m");
-    expect(result.stdout).toContain("[raven] beta-r");
-    expect(result.stdout).toMatch(/1 maester.*1 raven/);
+    expect(result.stdout).toContain("alpha-m");
+    expect(result.stdout).toContain("beta-r");
+    expect(result.stdout).toMatch(/2 source\(s\) up to date/);
   }, 60_000);
 
-  it("renders a no-matches warning beneath a drifted raven", async () => {
+  it("renders a no-matches warning beneath a drifted source", async () => {
     const remote = await createBareRemote({
       files: [{ path: "README.md", contents: "# only readme\n" }],
     });
     remotes.push(remote);
     await writeCitadelConfig(repo.path, {
-      schemaVersion: 2,
-      maesters: [],
-      ravens: [
+      schemaVersion: 1,
+      sources: [
         {
           name: "drifted",
           url: toFileUrl(remote.bareRepoUrl),
@@ -108,18 +111,23 @@ describe("CLI: maester sync", () => {
     });
     const result = await runCli(["sync"], repo.path);
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain("[raven] drifted");
+    expect(result.stdout).toContain("drifted");
     expect(result.stdout + result.stderr).toMatch(/no files matched includes/i);
   }, 30_000);
 
-  it("scopes a sync run by raven name", async () => {
+  it("scopes a sync run to a single source name", async () => {
     const a = await createBareRemote({ files: [{ path: "a.md", contents: "a\n" }] });
     const b = await createBareRemote({ files: [{ path: "b.md", contents: "b\n" }] });
     remotes.push(a, b);
     await writeCitadelConfig(repo.path, {
-      schemaVersion: 2,
-      maesters: [{ name: "alpha-m", url: toFileUrl(a.bareRepoUrl), ref: "main" }],
-      ravens: [
+      schemaVersion: 1,
+      sources: [
+        {
+          name: "alpha-m",
+          url: toFileUrl(a.bareRepoUrl),
+          ref: "main",
+          includes: ["a.md"],
+        },
         {
           name: "beta-r",
           url: toFileUrl(b.bareRepoUrl),
@@ -130,17 +138,16 @@ describe("CLI: maester sync", () => {
     });
     const result = await runCli(["sync", "beta-r"], repo.path);
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain("[raven] beta-r");
-    expect(result.stdout).not.toContain("[maester] alpha-m");
+    expect(result.stdout).toContain("beta-r");
+    expect(result.stdout).not.toContain("alpha-m");
   }, 30_000);
 
   it("exits non-zero and reports failure when a source has a bad ref", async () => {
     const remote = await createBareRemote({ files: [{ path: "README.md", contents: "ok\n" }] });
     remotes.push(remote);
     await writeCitadelConfig(repo.path, {
-      schemaVersion: 2,
-      maesters: [{ name: "alpha", url: toFileUrl(remote.bareRepoUrl), ref: "no-such-branch" }],
-      ravens: [],
+      schemaVersion: 1,
+      sources: [{ name: "alpha", url: toFileUrl(remote.bareRepoUrl), ref: "no-such-branch" }],
     });
     const result = await runCli(["sync"], repo.path);
     expect(result.code).not.toBe(0);
@@ -149,12 +156,16 @@ describe("CLI: maester sync", () => {
   }, 30_000);
 
   it("emits one JSON object per outcome with --json", async () => {
-    const remote = await createBareRemote({ files: [{ path: "README.md", contents: "ok\n" }] });
+    const remote = await createBareRemote({
+      files: [
+        { path: "maester.yaml", contents: "schemaVersion: 1\ndocuments:\n  - path: README.md\n" },
+        { path: "README.md", contents: "ok\n" },
+      ],
+    });
     remotes.push(remote);
     await writeCitadelConfig(repo.path, {
-      schemaVersion: 2,
-      maesters: [{ name: "alpha", url: toFileUrl(remote.bareRepoUrl), ref: "main" }],
-      ravens: [],
+      schemaVersion: 1,
+      sources: [{ name: "alpha", url: toFileUrl(remote.bareRepoUrl), ref: "main" }],
     });
     const result = await runCli(["--json", "sync"], repo.path);
     expect(result.code).toBe(0);
@@ -162,7 +173,6 @@ describe("CLI: maester sync", () => {
     const parsed = lines.map((l) => JSON.parse(l) as Record<string, unknown>);
     const outcome = parsed.find((p) => p.name === "alpha" && p.status === "added");
     expect(outcome?.name).toBe("alpha");
-    expect(outcome?.kind).toBe("maester");
     for (const obj of parsed) {
       expect(typeof obj).toBe("object");
     }
@@ -172,9 +182,8 @@ describe("CLI: maester sync", () => {
     const remote = await createBareRemote({ files: [{ path: "README.md", contents: "ok\n" }] });
     remotes.push(remote);
     await writeCitadelConfig(repo.path, {
-      schemaVersion: 2,
-      maesters: [{ name: "alpha", url: toFileUrl(remote.bareRepoUrl), ref: "main" }],
-      ravens: [],
+      schemaVersion: 1,
+      sources: [{ name: "alpha", url: toFileUrl(remote.bareRepoUrl), ref: "main" }],
     });
     const result = await runCli(["sync", "ghost"], repo.path);
     expect(result.code).not.toBe(0);

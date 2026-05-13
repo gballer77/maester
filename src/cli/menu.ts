@@ -4,9 +4,7 @@ import type { CliContext } from "./context.js";
 export type MenuChoice = "init" | "publish" | "status" | "exit";
 
 export async function showTopLevelMenu(ctx: CliContext): Promise<MenuChoice> {
-  const roles = ctx.repoRoot
-    ? detectRoles(ctx.repoRoot.path)
-    : { hasCitadel: false, hasMaester: false };
+  const roles = detectRoles(ctx.repoRoot.path);
   const citadelLabel = roles.hasCitadel ? "View citadel" : "Initialize a citadel";
   const citadelHint = roles.hasCitadel
     ? "summary of the existing config"

@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 
 export type RepoRoot = {
   path: string;
@@ -7,16 +7,11 @@ export type RepoRoot = {
   hasPackageJson: boolean;
 };
 
-export function findRepoRoot(start: string = process.cwd()): RepoRoot | undefined {
-  let current = resolve(start);
-  while (true) {
-    const hasGit = existsSync(resolve(current, ".git"));
-    const hasPackageJson = existsSync(resolve(current, "package.json"));
-    if (hasGit || hasPackageJson) {
-      return { path: current, hasGit, hasPackageJson };
-    }
-    const parent = dirname(current);
-    if (parent === current) return undefined;
-    current = parent;
-  }
+export function getRepoRoot(start: string = process.cwd()): RepoRoot {
+  const path = resolve(start);
+  return {
+    path,
+    hasGit: existsSync(resolve(path, ".git")),
+    hasPackageJson: existsSync(resolve(path, "package.json")),
+  };
 }

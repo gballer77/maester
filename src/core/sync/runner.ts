@@ -1,28 +1,23 @@
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { CitadelConfig, MaesterSource, RavenSource } from "../../schemas/citadel.js";
+import type { CitadelConfig, Source } from "../../schemas/citadel.js";
 import { resolveAuth } from "../auth/resolver.js";
 import { CACHE_SUBDIR, cachePathForSource, defaultDestinationFor } from "../config/paths.js";
 import { AuthError, MaesterError, RefNotFoundError } from "../errors.js";
 import { clearWorktree } from "../git/client.js";
-import type { FetchWarning, FetchedTree, SourceFetcher } from "../sources/fetcher.js";
-import { createMaesterFetcher } from "../sources/maester.js";
-import { createRavenFetcher } from "../sources/raven.js";
+import { type FetchWarning, type FetchedTree, fetchSource } from "../sources/fetcher.js";
 import { filterSetMatches, readProvenanceMarker } from "./provenance.js";
 import { stageDestination } from "./stage.js";
 
 export type SyncStatus = "added" | "updated" | "unchanged" | "failed";
-export type EntryKind = "maester" | "raven";
 
 export type SyncOutcome = {
-  kind: EntryKind;
   name: string;
   status: SyncStatus;
   destination: string;
   ref: string | undefined;
   commitSha?: string;
-  filterMode?: "manifest" | "no-manifest";
   warnings: FetchWarning[];
   error?: string;
 };
@@ -37,31 +32,26 @@ export type SyncOptions = {
   scope?: readonly string[];
   concurrency?: number;
   env?: NodeJS.ProcessEnv;
+  baseDir?: string;
   onProgress?: (event: ProgressEvent) => void;
 };
 
 export type ProgressEvent =
-  | { type: "start"; kind: EntryKind; name: string }
-  | { type: "fetched"; kind: EntryKind; name: string; commitSha: string }
-  | { type: "staged"; kind: EntryKind; name: string; status: SyncStatus }
-  | { type: "warning"; kind: EntryKind; name: string; warning: FetchWarning }
-  | { type: "failed"; kind: EntryKind; name: string; error: string };
-
-type Entry = { kind: "maester"; source: MaesterSource } | { kind: "raven"; source: RavenSource };
+  | { type: "start"; name: string }
+  | { type: "fetched"; name: string; commitSha: string }
+  | { type: "staged"; name: string; status: SyncStatus }
+  | { type: "warning"; name: string; warning: FetchWarning }
+  | { type: "failed"; name: string; error: string };
 
 const DEFAULT_CONCURRENCY = 4;
 
 export async function runSync(config: CitadelConfig, options: SyncOptions): Promise<SyncResult> {
   const env = options.env ?? process.env;
   const scope = options.scope?.length ? new Set(options.scope) : undefined;
-
-  const allEntries: Entry[] = [
-    ...config.maesters.map((source): Entry => ({ kind: "maester", source })),
-    ...config.ravens.map((source): Entry => ({ kind: "raven", source })),
-  ];
+  const baseDir = options.baseDir ?? config.baseDir;
 
   if (scope) {
-    const known = new Set(allEntries.map((e) => e.source.name));
+    const known = new Set(config.sources.map((s) => s.name));
     for (const name of scope) {
       if (!known.has(name)) {
         throw new MaesterError(
@@ -72,7 +62,7 @@ export async function runSync(config: CitadelConfig, options: SyncOptions): Prom
     }
   }
 
-  const entries = allEntries.filter((e) => !scope || scope.has(e.source.name));
+  const entries = config.sources.filter((s) => !scope || scope.has(s.name));
   const limit = Math.min(
     Math.max(1, options.concurrency ?? DEFAULT_CONCURRENCY),
     entries.length || 1,
@@ -91,7 +81,7 @@ export async function runSync(config: CitadelConfig, options: SyncOptions): Prom
           if (index >= entries.length) return;
           const entry = entries[index];
           if (!entry) return;
-          outcomes[index] = await processEntry(entry, options, env);
+          outcomes[index] = await processEntry(entry, options, env, baseDir);
         }
       })(),
     );
@@ -103,73 +93,50 @@ export async function runSync(config: CitadelConfig, options: SyncOptions): Prom
 }
 
 async function processEntry(
-  entry: Entry,
+  source: Source,
   options: SyncOptions,
   env: NodeJS.ProcessEnv,
+  baseDir: string | undefined,
 ): Promise<SyncOutcome> {
-  const cacheDir = cachePathForSource(options.repoRoot, entry.source.name);
-  const destination = entry.source.destination
-    ? resolve(options.repoRoot, entry.source.destination)
-    : defaultDestinationFor(options.repoRoot, entry.source.name);
+  const cacheDir = cachePathForSource(options.repoRoot, source.name);
+  const destination = source.destination
+    ? resolve(options.repoRoot, source.destination)
+    : defaultDestinationFor(options.repoRoot, source.name, baseDir);
 
-  options.onProgress?.({ type: "start", kind: entry.kind, name: entry.source.name });
+  options.onProgress?.({ type: "start", name: source.name });
 
   try {
-    const auth = resolveAuth(entry.source.auth, env);
+    const auth = resolveAuth(source.auth, env);
     const tokenForUrl = auth.type === "token" ? auth.value : undefined;
     const cacheExists = existsSync(cacheDir);
 
-    const fetcher: SourceFetcher =
-      entry.kind === "maester"
-        ? createMaesterFetcher(entry.source)
-        : createRavenFetcher(entry.source);
-
-    const tree: FetchedTree = await fetcher.fetch({
+    const tree: FetchedTree = await fetchSource(source, {
       cacheDir,
       cacheExists,
       tokenForUrl,
     });
 
-    options.onProgress?.({
-      type: "fetched",
-      kind: entry.kind,
-      name: entry.source.name,
-      commitSha: tree.commitSha,
-    });
+    options.onProgress?.({ type: "fetched", name: source.name, commitSha: tree.commitSha });
     for (const warning of tree.warnings) {
-      options.onProgress?.({
-        type: "warning",
-        kind: entry.kind,
-        name: entry.source.name,
-        warning,
-      });
+      options.onProgress?.({ type: "warning", name: source.name, warning });
     }
 
     const existingMarker = await readProvenanceMarker(destination);
     const wasUnchanged =
       !!existingMarker &&
       existingMarker.commitSha === tree.commitSha &&
-      existingMarker.sourceName === entry.source.name &&
+      existingMarker.sourceName === source.name &&
       filterSetMatches(existingMarker.filterSet, tree.filterSet) &&
       existsSync(destination);
 
     if (wasUnchanged) {
-      options.onProgress?.({
-        type: "staged",
-        kind: entry.kind,
-        name: entry.source.name,
-        status: "unchanged",
-      });
+      options.onProgress?.({ type: "staged", name: source.name, status: "unchanged" });
       return {
-        kind: entry.kind,
-        name: entry.source.name,
+        name: source.name,
         status: "unchanged",
         destination,
-        ref: entry.source.ref,
+        ref: source.ref,
         commitSha: tree.commitSha,
-        ...(entry.kind === "maester"
-          ? { filterMode: tree.filterSet === "all" ? "no-manifest" : "manifest" }
-          : {}),
         warnings: tree.warnings,
       };
     }
@@ -178,10 +145,9 @@ async function processEntry(
       cacheDir: tree.cacheDir,
       destination,
       marker: {
-        kind: tree.kind,
         sourceName: tree.name,
-        sourceUrl: entry.source.url,
-        ref: entry.source.ref,
+        sourceUrl: source.url,
+        ref: source.ref,
         commitSha: tree.commitSha,
         filterSet: tree.filterSet,
         syncedAt: new Date().toISOString(),
@@ -189,43 +155,28 @@ async function processEntry(
     });
 
     const status: SyncStatus = existingMarker ? "updated" : "added";
-    options.onProgress?.({
-      type: "staged",
-      kind: entry.kind,
-      name: entry.source.name,
-      status,
-    });
+    options.onProgress?.({ type: "staged", name: source.name, status });
     return {
-      kind: entry.kind,
-      name: entry.source.name,
+      name: source.name,
       status,
       destination,
-      ref: entry.source.ref,
+      ref: source.ref,
       commitSha: tree.commitSha,
-      ...(entry.kind === "maester"
-        ? { filterMode: tree.filterSet === "all" ? "no-manifest" : "manifest" }
-        : {}),
       warnings: tree.warnings,
     };
   } catch (err) {
     const message = errorMessage(err);
-    options.onProgress?.({
-      type: "failed",
-      kind: entry.kind,
-      name: entry.source.name,
-      error: message,
-    });
+    options.onProgress?.({ type: "failed", name: source.name, error: message });
     try {
       await clearWorktree(cacheDir);
     } catch {
       /* ignore */
     }
     return {
-      kind: entry.kind,
-      name: entry.source.name,
+      name: source.name,
       status: "failed",
       destination,
-      ref: entry.source.ref,
+      ref: source.ref,
       warnings: [],
       error: message,
     };

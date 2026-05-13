@@ -33,12 +33,11 @@ describe("stageDestination", () => {
       cacheDir,
       destination,
       marker: {
-        kind: "maester",
         sourceName: "alpha",
         sourceUrl: "https://example.com/a.git",
         ref: "main",
         commitSha: "0".repeat(40),
-        filterSet: "all",
+        filterSet: ["maester.yaml", "README.md", "extra.md"],
         syncedAt: new Date().toISOString(),
       },
     });
@@ -47,18 +46,16 @@ describe("stageDestination", () => {
     expect(entries).toContain("README.md");
     expect(entries).toContain(PROVENANCE_FILENAME);
     const marker = JSON.parse(await readFile(resolve(destination, PROVENANCE_FILENAME), "utf8"));
-    expect(marker.kind).toBe("maester");
     expect(marker.sourceName).toBe("alpha");
-    expect(marker.filterSet).toBe("all");
+    expect(marker.filterSet).toEqual(["maester.yaml", "README.md", "extra.md"]);
   });
 
-  it("records a raven marker with an includes filter set", async () => {
+  it("records an includes filter set on the provenance marker", async () => {
     const { cacheDir, destination } = await setupCache();
     await stageDestination({
       cacheDir,
       destination,
       marker: {
-        kind: "raven",
         sourceName: "vendor",
         sourceUrl: "https://example.com/v.git",
         ref: "main",
@@ -68,7 +65,6 @@ describe("stageDestination", () => {
       },
     });
     const marker = JSON.parse(await readFile(resolve(destination, PROVENANCE_FILENAME), "utf8"));
-    expect(marker.kind).toBe("raven");
     expect(marker.sourceName).toBe("vendor");
     expect(marker.filterSet).toEqual(["docs/**", "README.md"]);
   });
@@ -79,27 +75,24 @@ describe("stageDestination", () => {
       cacheDir,
       destination,
       marker: {
-        kind: "maester",
         sourceName: "alpha",
         sourceUrl: "https://example.com/a.git",
         ref: "main",
         commitSha: "a".repeat(40),
-        filterSet: "all",
+        filterSet: ["README.md"],
         syncedAt: new Date().toISOString(),
       },
     });
-    // Mutate the cache and re-stage; should overwrite cleanly.
     await writeFile(resolve(cacheDir, "README.md"), "updated\n", "utf8");
     await stageDestination({
       cacheDir,
       destination,
       marker: {
-        kind: "maester",
         sourceName: "alpha",
         sourceUrl: "https://example.com/a.git",
         ref: "main",
         commitSha: "b".repeat(40),
-        filterSet: "all",
+        filterSet: ["README.md"],
         syncedAt: new Date().toISOString(),
       },
     });
@@ -120,12 +113,11 @@ describe("assertDestinationSafe", () => {
     await mkdir(dir, { recursive: true });
     await writeFile(resolve(dir, "x.md"), "y", "utf8");
     await writeProvenanceMarker(dir, {
-      kind: "maester",
       sourceName: "alpha",
       sourceUrl: "https://example.com/a.git",
       ref: undefined,
       commitSha: "0".repeat(40),
-      filterSet: "all",
+      filterSet: ["x.md"],
       syncedAt: new Date().toISOString(),
     });
     await expect(assertDestinationSafe(dir, "alpha")).resolves.toBeUndefined();

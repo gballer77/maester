@@ -7,16 +7,8 @@ export type {
   SyncOptions,
   ProgressEvent,
 } from "./core/sync/runner.js";
-export type {
-  CitadelConfig,
-  MaesterSource,
-  RavenSource,
-  AuthRef,
-} from "./schemas/citadel.js";
-export type {
-  MaesterConfig,
-  PublishedDocument,
-} from "./schemas/maester.js";
+export type { CitadelConfig, Source, AuthRef } from "./schemas/citadel.js";
+export type { MaesterConfig, PublishedDocument } from "./schemas/maester.js";
 export {
   ConfigError,
   AuthError,

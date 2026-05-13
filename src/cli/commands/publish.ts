@@ -25,10 +25,6 @@ export function registerPublish(program: Command, getContext: () => CliContext):
 }
 
 export async function runPublish(ctx: CliContext): Promise<number> {
-  if (!ctx.repoRoot) {
-    ctx.logger.error("Could not find a repository root. Run inside a git repository.");
-    return 1;
-  }
   const roles = detectRoles(ctx.repoRoot.path);
 
   if (roles.hasMaester) {

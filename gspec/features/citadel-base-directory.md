@@ -8,7 +8,7 @@ spec-version: v1
 
 **Feature name:** Citadel Base Directory
 
-**Summary:** A top-level configuration field on the citadel (`baseDir`) that controls the parent folder under which every maester and raven is surfaced by default, replacing the previously hardcoded `citadel/` root. Per-source `destination` overrides continue to win unchanged.
+**Summary:** A top-level configuration field on the citadel (`baseDir`) that controls the parent folder under which every source is surfaced by default, replacing the previously hardcoded `citadel/` root. Per-source `destination` overrides continue to win unchanged.
 
 **Problem being solved:** The default destination root is currently hardcoded as `citadel/<source-name>/`, so any project that wants its synced content under a different parent folder (e.g. `vendor/`, `docs/external/`, `third-party/`) must set a `destination` on every single source. This is repetitive, error-prone (each new source must remember the prefix), and makes the intent ("all my synced content lives under X") implicit rather than declarative. A single top-level knob expresses the intent once, applies it uniformly, and keeps per-source overrides available for the genuine exceptions.
 
@@ -40,47 +40,47 @@ spec-version: v1
 - Migrating existing on-disk content when a user changes `baseDir` after a previous sync (the new sync writes to the new location; old directories are left untouched)
 - A `maester move` / `maester relocate` command that physically rewrites destinations on disk
 - Changing the cache directory layout (the cache is a separate concern and is not affected by `baseDir`)
-- Per-kind base directories (e.g. one base for maesters, another for ravens) — out of scope for this feature
+- Per-source-mode base directories (e.g. one base for manifest-driven sources, another for includes-driven ones) — out of scope for this feature
 - Templating or variable substitution inside `baseDir` (e.g. `${PROJECT}/citadel`)
 
 **Deferred ideas:**
 - A warning at sync time when the old base directory still contains citadel-produced content that is now orphaned by a `baseDir` change (a future quality-of-life signal)
 - A guided "rebase destinations" verb that moves existing synced content from the old base to the new one
-- Per-kind base directories if a real use case emerges
+- Per-mode base directories if a real use case emerges
 
 ## 4. Capabilities
 
-- [ ] **P0**: User can declare a top-level `baseDir` in the citadel config
+- [x] **P0**: User can declare a top-level `baseDir` in the citadel config
   - The schema accepts an optional string `baseDir` at the top level of the citadel configuration
   - When provided, every source whose `destination` is unset resolves to `<baseDir>/<source-name>/` at the repository root
   - When `baseDir` is omitted, behavior is identical to the prior default (`citadel/<source-name>/`)
   - Setting `baseDir` does not affect sources that declare their own `destination`
 
-- [ ] **P0**: `baseDir` is validated by the same path-safety rules as per-source `destination`
+- [x] **P0**: `baseDir` is validated by the same path-safety rules as per-source `destination`
   - Empty strings, leading `/`, and any `..` segment are rejected with a clear error pointing at the `baseDir` field
   - Invalid `baseDir` values cause config validation to fail before any sync work is attempted
   - Whitespace-only values are rejected
 
-- [ ] **P0**: Destination-collision detection continues to work correctly with `baseDir`
+- [x] **P0**: Destination-collision detection continues to work correctly with `baseDir`
   - Two sources that resolve to the same directory under the new base are rejected with a clear error naming both sources
   - A source with an explicit `destination` that collides with another source's `<baseDir>/<name>/` default is also rejected
   - The error message references the resolved absolute path so the conflict is unambiguous
 
-- [ ] **P0**: Sync uses `baseDir` when resolving each source's default destination
+- [x] **P0**: Sync uses `baseDir` when resolving each source's default destination
   - A fresh sync with `baseDir: "vendor"` writes every default-destination source to `vendor/<source-name>/`
   - Sources with a per-source `destination` continue to land exactly at that path, regardless of `baseDir`
   - Idempotent re-runs against the configured `baseDir` produce no spurious file modifications
 
-- [ ] **P0**: The init walkthrough prompts for `baseDir` and records the user's choice
+- [x] **P0**: The init walkthrough prompts for `baseDir` and records the user's choice
   - During citadel initialization, the user is shown a prompt for the base directory with the conventional default pre-filled
   - Accepting the default produces a config equivalent to today's behavior (whether the field is written explicitly or omitted is an implementation choice, but the resolved behavior must match)
   - A user-entered base directory is validated using the same rules as `baseDir` and re-prompted on invalid input
 
-- [ ] **P1**: Generated config documentation reflects the new field
+- [x] **P1**: Generated config documentation reflects the new field
   - Any header / comment block written to the citadel config file by init mentions `baseDir` and its default
   - Any in-repo human-facing documentation that previously stated content lands under `citadel/` is updated to describe the new resolution rule (`<baseDir>/<name>/` with the documented default)
 
-- [ ] **P1**: Changing `baseDir` after a previous sync is non-destructive
+- [x] **P1**: Changing `baseDir` after a previous sync is non-destructive
   - When a user updates `baseDir` and re-syncs, sync writes to the new resolved destinations and does not delete, move, or touch the previously-populated directories under the old base
   - The previously-populated directories are treated as the user's responsibility to remove
   - Sync does not refuse to run because of orphaned directories under the old base
@@ -88,8 +88,7 @@ spec-version: v1
 ## 5. Dependencies
 
 - **Citadel Initialization** ([citadel-initialization.md](citadel-initialization.md)) — the init walkthrough must be extended to prompt for `baseDir` and persist the choice into the generated config.
-- **Maester Sync** ([maester-sync.md](maester-sync.md)) — destination resolution at sync time must read `baseDir` instead of the hardcoded default; the destination-collision check must operate on the new resolution rule.
-- **Citadel Ravens** ([citadel-ravens.md](citadel-ravens.md)) — `baseDir` applies uniformly to both maesters and ravens; the raven entries' default destination must follow the same rule.
+- **Maester Sync** ([maester-sync.md](maester-sync.md)) — destination resolution at sync time must read `baseDir` instead of the hardcoded default; the destination-collision check must operate on the new resolution rule. `baseDir` applies uniformly to every source regardless of whether it is manifest-driven or includes-driven.
 
 **External dependencies:** None.
 
@@ -110,7 +109,7 @@ spec-version: v1
 ## 7. Success Metrics
 
 - A project with N configured sources can change the destination root for all of them by editing exactly one line of config (verified by comparing pre- and post-feature config diffs for a representative project).
-- 100% of existing v2 citadel configs continue to validate and sync to their prior destinations when `baseDir` is omitted (no observable behavior change without an opt-in).
+- 100% of existing citadel configs continue to validate and sync to their prior destinations when `baseDir` is omitted (no observable behavior change without an opt-in).
 - A misconfigured `baseDir` (leading `/`, `..`, empty string) is always rejected at config-validation time, never reaching the sync phase.
 - The init walkthrough captures a custom `baseDir` end-to-end (prompt → validation → committed config → resolved sync destinations) in a single run.
 

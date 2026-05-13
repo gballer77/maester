@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { DEFAULT_BASE_DIR } from "../../schemas/citadel.js";
 
 export const CITADEL_CONFIG_FILENAME = "citadel.yaml";
 export const MAESTER_CONFIG_FILENAME = "maester.yaml";
@@ -22,8 +23,12 @@ export function cachePathForSource(repoRoot: string, sourceName: string): string
   return resolve(repoRoot, CACHE_SUBDIR, sourceName);
 }
 
-export function defaultDestinationFor(repoRoot: string, sourceName: string): string {
-  return resolve(repoRoot, "citadel", sourceName);
+export function defaultDestinationFor(
+  repoRoot: string,
+  sourceName: string,
+  baseDir?: string,
+): string {
+  return resolve(repoRoot, baseDir ?? DEFAULT_BASE_DIR, sourceName);
 }
 
 export type RepoRoles = {

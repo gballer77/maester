@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { detectRoles } from "../../core/config/paths.js";
 import { detectDestinationCollisions, finalizeCitadel } from "../../core/init/finalize.js";
 import {
+  validateBaseDir,
   validateDestination,
   validateEnvVarName,
   validateGitUrl,
@@ -9,7 +10,7 @@ import {
   validateSourceName,
   validateTag,
 } from "../../core/init/validators.js";
-import type { AuthRef, MaesterSource, RavenSource } from "../../schemas/citadel.js";
+import { type AuthRef, DEFAULT_BASE_DIR, type Source } from "../../schemas/citadel.js";
 import { PromptCancelledError } from "../../ui/prompts.js";
 import type { CliContext } from "../context.js";
 
@@ -23,10 +24,6 @@ export function registerInit(program: Command, getContext: () => CliContext): vo
 }
 
 export async function runInit(ctx: CliContext): Promise<number> {
-  if (!ctx.repoRoot) {
-    ctx.logger.error("Could not find a repository root. Run inside a git repository.");
-    return 1;
-  }
   const roles = detectRoles(ctx.repoRoot.path);
 
   if (roles.hasCitadel) {
@@ -52,52 +49,35 @@ export async function runInit(ctx: CliContext): Promise<number> {
       return 0;
     }
 
-    const maesters: MaesterSource[] = [];
-    const ravens: RavenSource[] = [];
+    const baseDir = await collectBaseDir(ctx);
+    const effectiveBaseDir = baseDir ?? DEFAULT_BASE_DIR;
 
-    const reservedNames = (): Set<string> =>
-      new Set([...maesters.map((m) => m.name), ...ravens.map((r) => r.name)]);
+    const sources: Source[] = [];
+    const reservedNames = (): Set<string> => new Set(sources.map((s) => s.name));
 
     while (true) {
-      const source = await collectOneMaester(ctx, reservedNames());
-      maesters.push(source);
+      const source = await collectOneSource(ctx, reservedNames(), effectiveBaseDir);
+      sources.push(source);
       const addAnother = await ctx.prompts.confirm({
-        message: "Add another maester?",
+        message: "Add another source?",
         initialValue: false,
       });
       if (!addAnother) break;
     }
 
-    const addRavens = await ctx.prompts.confirm({
-      message: "Register any ravens? (third-party sources without a maester.yaml)",
-      initialValue: false,
-    });
-    if (addRavens) {
-      while (true) {
-        const raven = await collectOneRaven(ctx, reservedNames());
-        ravens.push(raven);
-        const addAnother = await ctx.prompts.confirm({
-          message: "Add another raven?",
-          initialValue: false,
-        });
-        if (!addAnother) break;
-      }
-    }
-
     try {
-      detectDestinationCollisions(ctx.repoRoot.path, { maesters, ravens });
+      detectDestinationCollisions(ctx.repoRoot.path, {
+        sources,
+        ...(baseDir ? { baseDir } : {}),
+      });
     } catch (err) {
       ctx.prompts.log.error((err as Error).message);
       ctx.prompts.outro("Cancelled due to destination collision. Re-run when resolved.");
       return 1;
     }
 
-    const summary =
-      ravens.length > 0
-        ? `Write ${maesters.length} maester(s) and ${ravens.length} raven(s) to citadel.yaml?`
-        : `Write ${maesters.length} maester(s) to citadel.yaml?`;
     const confirmWrite = await ctx.prompts.confirm({
-      message: summary,
+      message: `Write ${sources.length} source(s) to citadel.yaml?`,
       initialValue: true,
     });
     if (!confirmWrite) {
@@ -105,7 +85,10 @@ export async function runInit(ctx: CliContext): Promise<number> {
       return 0;
     }
 
-    const result = await finalizeCitadel(ctx.repoRoot.path, { maesters, ravens });
+    const result = await finalizeCitadel(ctx.repoRoot.path, {
+      sources,
+      ...(baseDir ? { baseDir } : {}),
+    });
     ctx.prompts.log.success(`Wrote ${result.citadelPath}`);
     if (result.gitignoreAdded.length > 0) {
       ctx.prompts.log.success(`Appended to .gitignore: ${result.gitignoreAdded.join(", ")}`);
@@ -115,19 +98,14 @@ export async function runInit(ctx: CliContext): Promise<number> {
     } else if (result.packageJsonScript === "no-package-json") {
       ctx.prompts.log.info("No package.json found — skipping script wire-up.");
     }
-    const tokenEntries: { kind: "maester" | "raven"; name: string; envVar: string }[] = [];
-    for (const m of maesters) {
-      if (m.auth?.type === "token") {
-        tokenEntries.push({ kind: "maester", name: m.name, envVar: m.auth.envVar });
-      }
-    }
-    for (const r of ravens) {
-      if (r.auth?.type === "token") {
-        tokenEntries.push({ kind: "raven", name: r.name, envVar: r.auth.envVar });
+    const tokenEntries: { name: string; envVar: string }[] = [];
+    for (const s of sources) {
+      if (s.auth?.type === "token") {
+        tokenEntries.push({ name: s.name, envVar: s.auth.envVar });
       }
     }
     if (tokenEntries.length > 0) {
-      const summary = tokenEntries.map((t) => `${t.name} (${t.kind}) -> ${t.envVar}`).join(", ");
+      const summary = tokenEntries.map((t) => `${t.name} -> ${t.envVar}`).join(", ");
       ctx.prompts.log.info(`Remember to set these env vars before syncing: ${summary}`);
     }
     ctx.prompts.outro("Next: run `npx maester sync` to fetch your sources.");
@@ -141,12 +119,13 @@ export async function runInit(ctx: CliContext): Promise<number> {
   }
 }
 
-async function collectOneMaester(
+async function collectOneSource(
   ctx: CliContext,
   reservedNames: Set<string>,
-): Promise<MaesterSource> {
+  effectiveBaseDir: string,
+): Promise<Source> {
   const name = await ctx.prompts.text({
-    message: "Maester name (short, kebab-case, e.g. 'design-system')",
+    message: "Source name (short, kebab-case, e.g. 'design-system')",
     validate: (value) => {
       const trimmed = value.trim();
       const result = validateSourceName(trimmed);
@@ -172,71 +151,9 @@ async function collectOneMaester(
     placeholder: "main",
   });
 
+  const includes = await collectIncludes(ctx);
   const auth = await collectAuth(ctx);
-  const destination = await collectDestination(ctx, name.trim());
-
-  const trimmedRef = ref.trim();
-  const trimmedDest = destination.trim();
-  const source: MaesterSource = {
-    name: name.trim(),
-    url: url.trim(),
-    ...(trimmedRef ? { ref: trimmedRef } : {}),
-    ...(auth ? { auth } : {}),
-    ...(trimmedDest ? { destination: trimmedDest } : {}),
-  };
-  return source;
-}
-
-async function collectOneRaven(ctx: CliContext, reservedNames: Set<string>): Promise<RavenSource> {
-  ctx.prompts.log.message(
-    "Ravens are pulled without a maester.yaml on the remote side — you'll declare what to include.",
-  );
-
-  const name = await ctx.prompts.text({
-    message: "Raven name (short, kebab-case, e.g. 'react-docs')",
-    validate: (value) => {
-      const trimmed = value.trim();
-      const result = validateSourceName(trimmed);
-      if (!result.ok) return result.reason;
-      if (reservedNames.has(trimmed)) {
-        return `Name '${trimmed}' is already used in this citadel.`;
-      }
-      return undefined;
-    },
-  });
-
-  const url = await ctx.prompts.text({
-    message: "Git URL (https://, ssh://, or git@host:path)",
-    validate: (value) => {
-      const result = validateGitUrl(value.trim());
-      return result.ok ? undefined : result.reason;
-    },
-  });
-
-  const ref = await ctx.prompts.text({
-    message:
-      "Ref to pin (branch, tag, or commit SHA) — leave blank for the remote's default branch",
-    placeholder: "main",
-  });
-
-  const includesRaw = await ctx.prompts.text({
-    message:
-      "Includes — repo-relative paths or globs, comma- or whitespace-separated. At least one required.",
-    placeholder: "docs/**/*.md, README.md",
-    validate: (value) => {
-      const entries = parseIncludesEntries(value);
-      if (entries.length === 0) return "At least one includes entry is required.";
-      for (const entry of entries) {
-        const result = validateIncludesEntry(entry);
-        if (!result.ok) return `'${entry}': ${result.reason}`;
-      }
-      return undefined;
-    },
-  });
-  const includes = parseIncludesEntries(includesRaw);
-
-  const auth = await collectAuth(ctx);
-  const destination = await collectDestination(ctx, name.trim());
+  const destination = await collectDestination(ctx, name.trim(), effectiveBaseDir);
 
   const description = await ctx.prompts.text({
     message: "Description (optional — short free text)",
@@ -262,25 +179,54 @@ async function collectOneRaven(ctx: CliContext, reservedNames: Set<string>): Pro
   const trimmedRef = ref.trim();
   const trimmedDest = destination.trim();
   const trimmedDesc = description.trim();
-  const raven: RavenSource = {
+  const source: Source = {
     name: name.trim(),
     url: url.trim(),
     ...(trimmedRef ? { ref: trimmedRef } : {}),
-    includes,
+    ...(includes.length > 0 ? { includes } : {}),
     ...(auth ? { auth } : {}),
     ...(trimmedDest ? { destination: trimmedDest } : {}),
     ...(trimmedDesc ? { description: trimmedDesc } : {}),
     ...(tags.length > 0 ? { tags } : {}),
   };
-  return raven;
+  return source;
+}
+
+async function collectIncludes(ctx: CliContext): Promise<string[]> {
+  const useExplicit = await ctx.prompts.confirm({
+    message:
+      "Declare an explicit `includes` list? (Skip to let the source's own maester.yaml manifest drive what gets pulled.)",
+    initialValue: false,
+  });
+  if (!useExplicit) return [];
+
+  const raw = await ctx.prompts.text({
+    message:
+      "Includes — repo-relative paths or globs, comma- or whitespace-separated. At least one required.",
+    placeholder: "docs/**/*.md, README.md",
+    validate: (value) => {
+      const entries = parseIncludesEntries(value);
+      if (entries.length === 0) return "At least one includes entry is required.";
+      for (const entry of entries) {
+        const result = validateIncludesEntry(entry);
+        if (!result.ok) return `'${entry}': ${result.reason}`;
+      }
+      return undefined;
+    },
+  });
+  return parseIncludesEntries(raw);
 }
 
 async function collectAuth(ctx: CliContext): Promise<AuthRef | undefined> {
-  const authType = await ctx.prompts.select<"none" | "token">({
+  const authType = await ctx.prompts.select<"public" | "delegated" | "token">({
     message: "How should this source authenticate?",
-    initialValue: "none",
+    initialValue: "public",
     options: [
-      { value: "none", label: "Delegate to my local git (SSH key, credential helper, gh auth)" },
+      { value: "public", label: "No auth required (public repo)" },
+      {
+        value: "delegated",
+        label: "Delegate to my local git (SSH key, credential helper, gh auth)",
+      },
       { value: "token", label: "Token via environment variable" },
     ],
   });
@@ -309,15 +255,33 @@ async function collectAuth(ctx: CliContext): Promise<AuthRef | undefined> {
   }
 }
 
-async function collectDestination(ctx: CliContext, name: string): Promise<string> {
+async function collectDestination(
+  ctx: CliContext,
+  name: string,
+  effectiveBaseDir: string,
+): Promise<string> {
   return ctx.prompts.text({
-    message: `Destination override (optional, relative to repo root). Default is citadel/${name}`,
+    message: `Destination override (optional, relative to repo root). Default is ${effectiveBaseDir}/${name}`,
     placeholder: "",
     validate: (value) => {
       const result = validateDestination(value.trim());
       return result.ok ? undefined : result.reason;
     },
   });
+}
+
+async function collectBaseDir(ctx: CliContext): Promise<string | undefined> {
+  const raw = await ctx.prompts.text({
+    message: `Base directory for synced sources (each defaults to <baseDir>/<name>). Press Enter to accept the default '${DEFAULT_BASE_DIR}'.`,
+    placeholder: DEFAULT_BASE_DIR,
+    validate: (value) => {
+      const result = validateBaseDir(value.trim());
+      return result.ok ? undefined : result.reason;
+    },
+  });
+  const trimmed = raw.trim();
+  if (trimmed.length === 0 || trimmed === DEFAULT_BASE_DIR) return undefined;
+  return trimmed;
 }
 
 function parseIncludesEntries(raw: string): string[] {

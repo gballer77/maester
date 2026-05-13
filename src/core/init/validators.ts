@@ -59,6 +59,16 @@ export function validateDestination(value: string): ValidationResult {
   return { ok: true };
 }
 
+export function validateBaseDir(value: string): ValidationResult {
+  if (!value || value.length === 0) return { ok: true };
+  if (value.startsWith("/"))
+    return { ok: false, reason: "Base directory must be repo-relative (no leading '/')." };
+  if (value.split(/[\\/]+/).some((seg) => seg === "..")) {
+    return { ok: false, reason: "Base directory cannot contain '..' segments." };
+  }
+  return { ok: true };
+}
+
 export function validateIncludesEntry(value: string): ValidationResult {
   if (!value || value.length === 0) return { ok: false, reason: "Includes entry cannot be empty." };
   if (/^\s+$/.test(value)) return { ok: false, reason: "Includes entry cannot be whitespace." };

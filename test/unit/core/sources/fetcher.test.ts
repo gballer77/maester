@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { discoverManifestFromCache } from "../../../../src/core/sources/maester.js";
+import { discoverManifestFromCache } from "../../../../src/core/sources/fetcher.js";
 import { type TempRepo, makeTmpRepo } from "../../../helpers/tmp-repo.js";
 
 let repo: TempRepo;
@@ -41,7 +41,7 @@ describe("discoverManifestFromCache", () => {
     }
   });
 
-  it("falls back when the manifest is schema-invalid", async () => {
+  it("reports invalid when the manifest fails schema validation", async () => {
     const dir = await cache();
     await writeFile(resolve(dir, "maester.yaml"), "schemaVersion: 99\ndocuments: []\n", "utf8");
     const result = await discoverManifestFromCache(dir);

@@ -4,50 +4,60 @@
 
 [![CI](https://github.com/baller-software/maester/actions/workflows/ci.yml/badge.svg)](https://github.com/baller-software/maester/actions/workflows/ci.yml)
 
-Maester is a Node CLI and helper library for teams whose knowledge is spread across multiple sources — Git repositories today, with hosted document tools and web sources planned next. Each source (a **maester**) declares its relevant docs, and a **citadel** gathers them into a structured knowledge base that is easier to read, update, and reason over.
+Maester is a Node CLI and helper library for teams whose knowledge is spread across multiple sources — Git repositories today, with hosted document tools and web sources planned next. A **citadel** gathers content from many remote git repositories into a structured knowledge base that is easier to read, update, and reason over.
 
-For sources you do not own (public third-party repos, vendor docs you have read access to), the citadel can also register **ravens** — see below.
+A repo you own can publish a `maester.yaml` manifest declaring what it offers — the citadel consumes whatever the manifest publishes. For sources you do not own (public third-party repos, vendor docs you have read access to), the citadel can take ownership of the filter set by declaring an `includes` list directly on the source — see below.
 
 ## Two roles, two files
 
-Maester defines two repository roles, each declared by a single committed YAML file at the repo root:
+Maester defines two repository roles, each declared by a single committed YAML file at the directory where the CLI was invoked:
 
 | Role     | File           | Created by         |
 |----------|----------------|--------------------|
 | citadel  | `citadel.yaml` | `maester init`     |
 | maester  | `maester.yaml` | `maester publish`  |
 
-A repo can be one role, the other, or both. There is at most one of each per repo.
+A directory can hold one role, the other, or both. There is at most one of each per directory.
+
+### Where do the files land?
+
+**Every maester command uses the current working directory as the root.** When you run `npx maester init` from a directory, `citadel.yaml` is created in that exact directory — never in an ancestor. The same goes for `npx maester publish` (writes `maester.yaml` here), `npx maester sync` (reads `citadel.yaml` from here), and the interactive menu (`npx maester`).
+
+If you run a maester command from the wrong directory, `cd` to the intended directory and re-run. The CLI does not walk upward to find a project root, so a stray `.git/` or `package.json` in a parent directory will not pull configuration files away from where you typed the command.
 
 ## Quickstart
 
-In the repository you want to populate with aggregated knowledge:
+In the directory you want to populate with aggregated knowledge:
 
 ```sh
-npx maester              # interactive menu
-npx maester init         # citadel walkthrough
-npx maester sync         # fetch all configured sources
+npx maester              # interactive menu (uses cwd as root)
+npx maester init         # citadel walkthrough — creates ./citadel.yaml
+npx maester sync         # fetch all configured sources — reads ./citadel.yaml
 ```
 
-In a repository that *publishes* docs to other citadels:
+In a directory that *publishes* docs to other citadels:
 
 ```sh
-npx maester publish      # maester manifest walkthrough
+npx maester publish      # maester manifest walkthrough — creates ./maester.yaml
 ```
 
-## Ravens — pulling from sources you don't own
+## Pulling from sources you don't own
 
-A citadel can declare **ravens** alongside its maesters. A raven is a git source the citadel pulls without any `maester.yaml` on the remote side — useful for public third-party repos and vendor docs you have read access to but cannot modify. Because the source publishes no manifest, the citadel itself declares an `includes` list (paths or globs) saying what to materialize.
+Every entry in `citadel.yaml` is a **source** — a remote git repo. Each source is one of two modes, decided implicitly by whether you declare an `includes` list on it:
+
+- **Manifest-driven** (no `includes`): the remote repo publishes its own `maester.yaml` declaring what it offers. The remote owns the publish surface; the citadel just consumes it. Use this for repos you own.
+- **Includes-driven** (`includes` set): the citadel declares the filter set directly. The remote `maester.yaml` (if any) is ignored. Use this for public third-party repos, vendor docs you have read access to but cannot modify, and any other source that does not publish a manifest.
 
 ```yaml
 # citadel.yaml (excerpt)
-schemaVersion: 2
+schemaVersion: 1
 
-maesters:
+sources:
+  # Manifest-driven — the remote publishes its own maester.yaml.
   - name: design-system
     url: https://github.com/example-org/design-system.git
 
-ravens:
+  # Includes-driven — the citadel owns the filter set.
   - name: react-docs
     url: https://github.com/facebook/react.git
     ref: main
@@ -57,7 +67,7 @@ ravens:
     description: Upstream React documentation snapshot.
 ```
 
-`npx maester sync` syncs both kinds in one pass and labels each line with `[maester]` or `[raven]`. The trade-off versus a maester: when the source repo restructures, the citadel's `includes` may need to be updated. Sync prints a warning when a raven's includes resolve to zero files so drift is visible.
+`npx maester sync` processes every source in one pass. The trade-off for the includes-driven mode: when the remote repo restructures, the citadel's `includes` may need to be updated. Sync prints a warning when an includes-driven source resolves to zero files so drift is visible.
 
 ## Prerequisites
 
@@ -100,11 +110,11 @@ maester
 
 ## Environment Variables
 
-Maester reads tokens only at runtime; nothing secret is ever written to disk. Per-maester token env-var **names** are stored in `citadel.yaml`; the values live in your shell, `.env` loader, or CI secret manager.
+Maester reads tokens only at runtime; nothing secret is ever written to disk. Per-source token env-var **names** are stored in `citadel.yaml`; the values live in your shell, `.env` loader, or CI secret manager.
 
 | Variable | Purpose |
 |---|---|
-| `<user-defined>` | Each maester with `auth.type: "token"` reads from the env-var name in its config (e.g. `MAESTER_DOCS_TOKEN`). |
+| `<user-defined>` | Each source with `auth.type: "token"` reads from the env-var name in its config (e.g. `MAESTER_DOCS_TOKEN`). |
 | `NO_COLOR` | Disable ANSI color. Standard. |
 | `FORCE_COLOR` | Force color (`0`–`3`). Standard. |
 | `MAESTER_THEME` | `light` or `dark` to override automatic detection. |

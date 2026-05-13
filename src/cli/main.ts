@@ -110,10 +110,6 @@ async function runNoArgs(ctx: CliContext): Promise<number> {
     process.stdout.write("Run `maester --help` to see available commands.\n");
     return 0;
   }
-  if (!ctx.repoRoot) {
-    ctx.logger.error("Could not find a repository root. Run inside a git repository.");
-    return 1;
-  }
   const roles = detectRoles(ctx.repoRoot.path);
   const showWelcome = !roles.hasCitadel && !roles.hasMaester && !ctx.flags.noWelcome;
   if (showWelcome) {
@@ -147,7 +143,6 @@ async function runNoArgs(ctx: CliContext): Promise<number> {
 }
 
 async function runStatus(ctx: CliContext): Promise<number> {
-  if (!ctx.repoRoot) return 1;
   const roles = detectRoles(ctx.repoRoot.path);
   ctx.prompts.log.message(`Citadel: ${roles.hasCitadel ? "configured" : "not configured"}`);
   ctx.prompts.log.message(`Maester: ${roles.hasMaester ? "configured" : "not configured"}`);

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  validateBaseDir,
   validateDestination,
   validateEnvVarName,
   validateGitUrl,
@@ -79,5 +80,27 @@ describe("validateDestination", () => {
 
   it("accepts a normal nested path", () => {
     expect(validateDestination("vendor/docs").ok).toBe(true);
+  });
+});
+
+describe("validateBaseDir", () => {
+  it("accepts blank (means default)", () => {
+    expect(validateBaseDir("").ok).toBe(true);
+  });
+
+  it("accepts a single-segment slug", () => {
+    expect(validateBaseDir("vendor").ok).toBe(true);
+  });
+
+  it("accepts a nested path", () => {
+    expect(validateBaseDir("docs/external").ok).toBe(true);
+  });
+
+  it("rejects leading slash", () => {
+    expect(validateBaseDir("/abs").ok).toBe(false);
+  });
+
+  it("rejects '..' segments", () => {
+    expect(validateBaseDir("a/../b").ok).toBe(false);
   });
 });

@@ -42,24 +42,7 @@ export const AuthRefTokenSchema = z
 
 export const AuthRefSchema = z.discriminatedUnion("type", [AuthRefNoneSchema, AuthRefTokenSchema]);
 
-export const MaesterSourceSchema = z
-  .object({
-    name: z
-      .string()
-      .min(1)
-      .regex(SLUG_RE, "name must be a kebab-case slug starting with a letter or digit"),
-    url: z.string().refine(isValidGitUrl, "url must be https://, ssh://, or git@host:path"),
-    ref: z.string().min(1).optional(),
-    auth: AuthRefSchema.optional(),
-    destination: z
-      .string()
-      .min(1)
-      .refine(isSafeRelativePath, "destination must be a repo-relative path with no '..' segments")
-      .optional(),
-  })
-  .strict();
-
-export const RavenSourceSchema = z
+export const SourceSchema = z
   .object({
     name: z
       .string()
@@ -77,7 +60,8 @@ export const RavenSourceSchema = z
             "includes entry must be a repo-relative path or glob; no leading '/' and no '..'",
           ),
       )
-      .min(1, "ravens must declare at least one includes entry"),
+      .min(1, "includes must declare at least one entry when present")
+      .optional(),
     auth: AuthRefSchema.optional(),
     destination: z
       .string()
@@ -89,130 +73,77 @@ export const RavenSourceSchema = z
   })
   .strict();
 
-type ParsedCitadelV2 = {
-  schemaVersion: 2;
-  maesters: z.infer<typeof MaesterSourceSchema>[];
-  ravens: z.infer<typeof RavenSourceSchema>[];
+export const DEFAULT_BASE_DIR = "citadel";
+
+export function resolveBaseDir(config: { baseDir?: string }): string {
+  return config.baseDir ?? DEFAULT_BASE_DIR;
+}
+
+type ParsedCitadel = {
+  schemaVersion: 1;
+  baseDir?: string;
+  sources: z.infer<typeof SourceSchema>[];
 };
 
-function applyCombinedInvariants(
-  data: ParsedCitadelV2,
-  ctx: z.RefinementCtx,
-  baseFieldOverride?: { maestersField: string },
-): void {
-  const maestersField = baseFieldOverride?.maestersField ?? "maesters";
-  const total = data.maesters.length + data.ravens.length;
-  if (total === 0) {
+function applyCombinedInvariants(data: ParsedCitadel, ctx: z.RefinementCtx): void {
+  if (data.sources.length === 0) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: "citadel must declare at least one maester or raven",
-      path: [maestersField],
+      message: "citadel must declare at least one source",
+      path: ["sources"],
     });
     return;
   }
 
-  const namesSeen = new Map<string, { kind: "maester" | "raven"; field: string; index: number }>();
-  const destsSeen = new Map<
-    string,
-    { kind: "maester" | "raven"; field: string; index: number; name: string }
-  >();
+  const baseDir = data.baseDir ?? DEFAULT_BASE_DIR;
+  const namesSeen = new Map<string, number>();
+  const destsSeen = new Map<string, { index: number; name: string }>();
 
-  function registerName(
-    name: string | undefined,
-    kind: "maester" | "raven",
-    field: string,
-    index: number,
-  ): void {
-    if (!name) return;
-    const prior = namesSeen.get(name);
-    if (prior !== undefined) {
+  for (let i = 0; i < data.sources.length; i++) {
+    const entry = data.sources[i];
+    if (!entry?.name) continue;
+    const priorIndex = namesSeen.get(entry.name);
+    if (priorIndex !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `duplicate name '${name}' — also used by ${prior.kind} at ${prior.field}[${prior.index}]`,
-        path: [field, index, "name"],
+        message: `duplicate name '${entry.name}' — also used by sources[${priorIndex}]`,
+        path: ["sources", i, "name"],
       });
     } else {
-      namesSeen.set(name, { kind, field, index });
+      namesSeen.set(entry.name, i);
     }
-  }
 
-  function registerDestination(
-    name: string | undefined,
-    destination: string | undefined,
-    kind: "maester" | "raven",
-    field: string,
-    index: number,
-  ): void {
-    if (!name) return;
-    const resolved = destination
-      ? resolve("/_citadel_root_", destination)
-      : resolve("/_citadel_root_", "citadel", name);
+    const resolved = entry.destination
+      ? resolve("/_citadel_root_", entry.destination)
+      : resolve("/_citadel_root_", baseDir, entry.name);
     const prior = destsSeen.get(resolved);
     if (prior !== undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `destination collision: ${kind} '${name}' and ${prior.kind} '${prior.name}' (${prior.field}[${prior.index}]) both resolve to the same path`,
-        path: [field, index, "destination"],
+        message: `destination collision: sources '${entry.name}' and '${prior.name}' (sources[${prior.index}]) both resolve to the same path`,
+        path: ["sources", i, "destination"],
       });
     } else {
-      destsSeen.set(resolved, { kind, field, index, name });
+      destsSeen.set(resolved, { index: i, name: entry.name });
     }
-  }
-
-  for (let i = 0; i < data.maesters.length; i++) {
-    const entry = data.maesters[i];
-    registerName(entry?.name, "maester", maestersField, i);
-    registerDestination(entry?.name, entry?.destination, "maester", maestersField, i);
-  }
-  for (let i = 0; i < data.ravens.length; i++) {
-    const entry = data.ravens[i];
-    registerName(entry?.name, "raven", "ravens", i);
-    registerDestination(entry?.name, entry?.destination, "raven", "ravens", i);
   }
 }
 
 export const CitadelConfigSchema = z
   .object({
-    schemaVersion: z.literal(2),
-    maesters: z.array(MaesterSourceSchema).optional().default([]),
-    ravens: z.array(RavenSourceSchema).optional().default([]),
-  })
-  .strict()
-  .superRefine((data, ctx) => {
-    applyCombinedInvariants(data as ParsedCitadelV2, ctx);
-  });
-
-export const CitadelConfigV1Schema = z
-  .object({
     schemaVersion: z.literal(1),
-    sources: z.array(MaesterSourceSchema),
+    baseDir: z
+      .string()
+      .min(1)
+      .refine(isSafeRelativePath, "baseDir must be a repo-relative path with no '..' segments")
+      .optional(),
+    sources: z.array(SourceSchema).optional().default([]),
   })
   .strict()
   .superRefine((data, ctx) => {
-    // Run the same invariants against the v1 shape so legacy configs are still validated.
-    applyCombinedInvariants(
-      {
-        schemaVersion: 2,
-        maesters: data.sources,
-        ravens: [],
-      },
-      ctx,
-      { maestersField: "sources" },
-    );
+    applyCombinedInvariants(data as ParsedCitadel, ctx);
   });
-
-export function migrateCitadelV1ToV2(
-  v1: z.infer<typeof CitadelConfigV1Schema>,
-): z.infer<typeof CitadelConfigSchema> {
-  return {
-    schemaVersion: 2,
-    maesters: v1.sources,
-    ravens: [],
-  };
-}
 
 export type AuthRef = z.infer<typeof AuthRefSchema>;
-export type MaesterSource = z.infer<typeof MaesterSourceSchema>;
-export type RavenSource = z.infer<typeof RavenSourceSchema>;
+export type Source = z.infer<typeof SourceSchema>;
 export type CitadelConfig = z.infer<typeof CitadelConfigSchema>;
-export type CitadelConfigV1 = z.infer<typeof CitadelConfigV1Schema>;

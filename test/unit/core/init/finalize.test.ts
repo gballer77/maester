@@ -19,19 +19,17 @@ afterEach(async () => {
 describe("finalizeCitadel", () => {
   it("writes citadel.yaml, appends .maester/ to .gitignore, and adds the sync script", async () => {
     const result = await finalizeCitadel(repo.path, {
-      maesters: [
+      sources: [
         { name: "alpha", url: "https://example.com/a.git" },
         { name: "beta", url: "https://example.com/b.git", ref: "main" },
       ],
-      ravens: [],
     });
     expect(result.citadelPath.endsWith("citadel.yaml")).toBe(true);
     expect(result.gitignoreAdded).toEqual([".maester/"]);
     expect(result.packageJsonScript).toBe("added");
 
     const config = await loadCitadelConfig(repo.path);
-    expect(config.maesters).toHaveLength(2);
-    expect(config.ravens).toEqual([]);
+    expect(config.sources).toHaveLength(2);
 
     const gitignore = await readFile(repo.resolve(".gitignore"), "utf8");
     expect(gitignore).toContain(".maester/");
@@ -40,10 +38,10 @@ describe("finalizeCitadel", () => {
     expect(pkg.scripts["maester:sync"]).toBe("maester sync");
   });
 
-  it("writes a citadel containing both maesters and ravens", async () => {
+  it("writes a citadel containing both manifest-driven and includes-driven sources", async () => {
     await finalizeCitadel(repo.path, {
-      maesters: [{ name: "alpha", url: "https://example.com/a.git" }],
-      ravens: [
+      sources: [
+        { name: "alpha", url: "https://example.com/a.git" },
         {
           name: "react-docs",
           url: "https://github.com/facebook/react.git",
@@ -52,19 +50,18 @@ describe("finalizeCitadel", () => {
       ],
     });
     const config = await loadCitadelConfig(repo.path);
-    expect(config.maesters[0]?.name).toBe("alpha");
-    expect(config.ravens[0]?.name).toBe("react-docs");
-    expect(config.ravens[0]?.includes).toEqual(["docs/**/*.md", "README.md"]);
+    expect(config.sources[0]?.name).toBe("alpha");
+    expect(config.sources[0]?.includes).toBeUndefined();
+    expect(config.sources[1]?.name).toBe("react-docs");
+    expect(config.sources[1]?.includes).toEqual(["docs/**/*.md", "README.md"]);
   });
 
   it("does not re-add the .gitignore entry on a second run", async () => {
     await finalizeCitadel(repo.path, {
-      maesters: [{ name: "alpha", url: "https://example.com/a.git" }],
-      ravens: [],
+      sources: [{ name: "alpha", url: "https://example.com/a.git" }],
     });
     const result = await finalizeCitadel(repo.path, {
-      maesters: [{ name: "alpha", url: "https://example.com/a.git" }],
-      ravens: [],
+      sources: [{ name: "alpha", url: "https://example.com/a.git" }],
     });
     expect(result.gitignoreAdded).toEqual([]);
   });
@@ -72,8 +69,7 @@ describe("finalizeCitadel", () => {
   it("reports 'already-set' when the maester:sync script already matches", async () => {
     await ensureScript(repo.path, "maester:sync", "maester sync");
     const result = await finalizeCitadel(repo.path, {
-      maesters: [{ name: "alpha", url: "https://example.com/a.git" }],
-      ravens: [],
+      sources: [{ name: "alpha", url: "https://example.com/a.git" }],
     });
     expect(result.packageJsonScript).toBe("already-set");
   });
@@ -82,31 +78,29 @@ describe("finalizeCitadel", () => {
     await repo.cleanup();
     repo = await makeTmpRepo({ withPackageJson: false });
     const result = await finalizeCitadel(repo.path, {
-      maesters: [{ name: "alpha", url: "https://example.com/a.git" }],
-      ravens: [],
+      sources: [{ name: "alpha", url: "https://example.com/a.git" }],
     });
     expect(result.packageJsonScript).toBe("no-package-json");
   });
 });
 
 describe("detectDestinationCollisions", () => {
-  it("throws when two maesters resolve to the same destination", () => {
+  it("throws when two sources resolve to the same destination", () => {
     expect(() =>
       detectDestinationCollisions(repo.path, {
-        maesters: [
+        sources: [
           { name: "alpha", url: "https://example.com/a.git", destination: "shared" },
           { name: "beta", url: "https://example.com/b.git", destination: "shared" },
         ],
-        ravens: [],
       }),
     ).toThrow(/destination/);
   });
 
-  it("throws when a maester and a raven resolve to the same destination", () => {
+  it("throws when a manifest-driven source and an includes-driven source collide", () => {
     expect(() =>
       detectDestinationCollisions(repo.path, {
-        maesters: [{ name: "alpha", url: "https://example.com/a.git", destination: "shared" }],
-        ravens: [
+        sources: [
+          { name: "alpha", url: "https://example.com/a.git", destination: "shared" },
           {
             name: "beta",
             url: "https://example.com/b.git",
@@ -118,11 +112,11 @@ describe("detectDestinationCollisions", () => {
     ).toThrow(/destination/);
   });
 
-  it("does not throw when destinations differ across kinds", () => {
+  it("does not throw when destinations differ", () => {
     expect(() =>
       detectDestinationCollisions(repo.path, {
-        maesters: [{ name: "alpha", url: "https://example.com/a.git" }],
-        ravens: [
+        sources: [
+          { name: "alpha", url: "https://example.com/a.git" },
           {
             name: "beta",
             url: "https://example.com/b.git",
@@ -131,5 +125,42 @@ describe("detectDestinationCollisions", () => {
         ],
       }),
     ).not.toThrow();
+  });
+
+  it("uses baseDir when resolving destinations during collision detection", () => {
+    expect(() =>
+      detectDestinationCollisions(repo.path, {
+        baseDir: "vendor",
+        sources: [
+          { name: "alpha", url: "https://example.com/a.git" },
+          { name: "other", url: "https://example.com/b.git", destination: "vendor/alpha" },
+        ],
+      }),
+    ).toThrow(/destination/);
+  });
+});
+
+describe("finalizeCitadel with baseDir", () => {
+  it("writes baseDir to citadel.yaml when set", async () => {
+    await finalizeCitadel(repo.path, {
+      baseDir: "vendor",
+      sources: [{ name: "alpha", url: "https://example.com/a.git" }],
+    });
+    const text = await readFile(repo.resolve("citadel.yaml"), "utf8");
+    expect(text).toContain("baseDir: vendor");
+
+    const config = await loadCitadelConfig(repo.path);
+    expect(config.baseDir).toBe("vendor");
+  });
+
+  it("omits baseDir from citadel.yaml when not set", async () => {
+    await finalizeCitadel(repo.path, {
+      sources: [{ name: "alpha", url: "https://example.com/a.git" }],
+    });
+    const text = await readFile(repo.resolve("citadel.yaml"), "utf8");
+    expect(text).not.toMatch(/^baseDir:/m);
+
+    const config = await loadCitadelConfig(repo.path);
+    expect(config.baseDir).toBeUndefined();
   });
 });
