@@ -10,6 +10,10 @@ import {
   validateSourceName,
   validateTag,
 } from "../../core/init/validators.js";
+import { runSkillInstall } from "../../core/skill/runner.js";
+import { listSkillTargets } from "../../core/skill/targets/index.js";
+import type { SkillTargetId } from "../../core/skill/types.js";
+import { SKILL_VERSION } from "../../core/skill/version.js";
 import { type AuthRef, DEFAULT_BASE_DIR, type Source } from "../../schemas/citadel.js";
 import { PromptCancelledError } from "../../ui/prompts.js";
 import type { CliContext } from "../context.js";
@@ -108,6 +112,9 @@ export async function runInit(ctx: CliContext): Promise<number> {
       const summary = tokenEntries.map((t) => `${t.name} -> ${t.envVar}`).join(", ");
       ctx.prompts.log.info(`Remember to set these env vars before syncing: ${summary}`);
     }
+
+    await maybeInstallSkill(ctx, baseDir ?? DEFAULT_BASE_DIR);
+
     ctx.prompts.outro("Next: run `npx maester sync` to fetch your sources.");
     return 0;
   } catch (err) {
@@ -116,6 +123,74 @@ export async function runInit(ctx: CliContext): Promise<number> {
       return 130;
     }
     throw err;
+  }
+}
+
+async function maybeInstallSkill(ctx: CliContext, baseDir: string): Promise<void> {
+  let wantsSkill: boolean;
+  try {
+    wantsSkill = await ctx.prompts.confirm({
+      message: "Install the Grand Maester agent skill? (Recommended)",
+      initialValue: true,
+    });
+  } catch (err) {
+    if (err instanceof PromptCancelledError) {
+      ctx.prompts.log.info(
+        "Skill install cancelled — citadel is configured. Run `maester skill install` later if you change your mind.",
+      );
+      return;
+    }
+    throw err;
+  }
+  if (!wantsSkill) return;
+
+  let targets: SkillTargetId[];
+  try {
+    targets = await ctx.prompts.multiselect<SkillTargetId>({
+      message: "Which agent(s) should the skill be installed for?",
+      options: listSkillTargets().map((t) => ({ value: t.id, label: t.label })),
+      initialValues: ["claude-code", "codex"] as SkillTargetId[],
+      required: true,
+    });
+  } catch (err) {
+    if (err instanceof PromptCancelledError) {
+      ctx.prompts.log.info(
+        "Skill install cancelled — citadel is configured. Run `maester skill install` later if you change your mind.",
+      );
+      return;
+    }
+    throw err;
+  }
+  if (targets.length === 0) return;
+
+  try {
+    const result = await runSkillInstall(ctx.repoRoot.path, {
+      targets,
+      mode: "install",
+      citadelBaseDir: baseDir,
+    });
+    for (const outcome of result.outcomes) {
+      const artifacts = outcome.artifactPaths.join(", ");
+      if (outcome.action === "failed") {
+        ctx.prompts.log.error(
+          `${outcome.label}: failed${outcome.error ? ` — ${outcome.error}` : ""}`,
+        );
+      } else if (outcome.action === "installed" || outcome.action === "upgraded") {
+        ctx.prompts.log.success(`${outcome.label}: ${outcome.action} → ${artifacts}`);
+      } else {
+        ctx.prompts.log.info(`${outcome.label}: already up to date (${artifacts})`);
+      }
+    }
+    const total = result.counts.installed + result.counts.upgraded + result.counts.unchanged;
+    if (result.counts.failed === 0 && total > 0) {
+      ctx.prompts.log.success(
+        `Grand Maester installed for ${total} target(s) at v${SKILL_VERSION}.`,
+      );
+    }
+  } catch (err) {
+    ctx.prompts.log.error(
+      `Skill install failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
   }
 }
 

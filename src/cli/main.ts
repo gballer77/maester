@@ -7,6 +7,7 @@ import { createTheming } from "../ui/theme/index.js";
 import { readColumns } from "../ui/width.js";
 import { registerInit, runInit } from "./commands/init.js";
 import { registerPublish, runPublish } from "./commands/publish.js";
+import { registerSkill } from "./commands/skill.js";
 import { registerStatus } from "./commands/status.js";
 import { registerSync } from "./commands/sync.js";
 import { type CliContext, type GlobalFlags, buildContext } from "./context.js";
@@ -75,6 +76,7 @@ function buildProgram(): Command {
 
   registerInit(program, () => buildContext(extractFlags(program.opts())));
   registerPublish(program, () => buildContext(extractFlags(program.opts())));
+  registerSkill(program, () => buildContext(extractFlags(program.opts())));
   registerStatus(program, () => buildContext(extractFlags(program.opts())));
   registerSync(program, () => buildContext(extractFlags(program.opts())));
 

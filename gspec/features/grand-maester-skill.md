@@ -66,70 +66,70 @@ spec-version: v1
 
 ## 4. Capabilities
 
-- [ ] **P0**: User is offered the Grand Maester install step during citadel initialization, recommended by default
+- [x] **P0**: User is offered the Grand Maester install step during citadel initialization, recommended by default
   - The citadel-init walkthrough includes a clearly labeled "Install the Grand Maester agent skill?" prompt with "yes" as the default answer
   - Declining the prompt completes init normally and writes zero skill artifacts
   - Accepting the prompt advances to target-agent selection without leaving the walkthrough
   - The prompt appears only when init is otherwise going to succeed — it is not asked on cancellation paths
 
-- [ ] **P0**: User selects one or more target agents during install
+- [x] **P0**: User selects one or more target agents during install
   - Supported v1 targets are **Claude Code**, **Codex CLI**, **Cursor**, and a **generic `AGENTS.md`** fallback
   - The user can pick one or multiple targets in a single run; at least one must be selected to complete the install
   - Unknown / unsupported target identifiers (e.g., passed via flag) are rejected with a clear error before any file is written
   - The selection is presented in a way that makes the generic `AGENTS.md` option discoverable for agents not on the named list
 
-- [ ] **P0**: Install writes the correct per-target artifacts into the citadel repository
+- [x] **P0**: Install writes the correct per-target artifacts into the citadel repository
   - For each selected target, the install writes the integration artifact(s) at the path that target expects (e.g., a skill directory for Claude Code, a rules file for Cursor, an `AGENTS.md` file for Codex CLI / generic, etc.)
   - Each artifact carries a clearly marked managed region so future upgrades can update its content without clobbering user-added content
   - Artifacts are safe to commit — they contain no secret values and no machine-local paths
   - The install reports the exact files written at the end of the run so the user can verify
 
-- [ ] **P0**: Installed artifacts encode citadel awareness
+- [x] **P0**: Installed artifacts encode citadel awareness
   - The artifacts explain to the host agent that citadel content lives under the citadel base directory (see [Citadel Base Directory](citadel-base-directory.md)) and is organized into per-source subdirectories
   - The artifacts instruct the host agent to consult citadel content when answering questions the citadel covers, with a short, agent-friendly description of how to identify relevant files
   - The instruction text references the citadel by its repository-local path so the agent can find it without configuration
 
-- [ ] **P0**: Installed artifacts encode canon-preferring, draft-tolerant state awareness
+- [x] **P0**: Installed artifacts encode canon-preferring, draft-tolerant state awareness
   - The artifacts instruct the host agent to treat files whose resolved state is `canon` as authoritative when answering
   - `draft` files are surfaced as informational context only — the agent may cite them but must mark them as draft when doing so
   - State is read inline from each file using the conventions defined by [Document State Tagging](document-state-tagging.md); the agent is told to look there and is not expected to consult any external index
   - When an answer cites a draft file, the cited material is presented alongside the file's `state` so the developer can tell
 
-- [ ] **P0**: Installed artifacts encode freshness awareness via a pre-read status check
+- [x] **P0**: Installed artifacts encode freshness awareness via a pre-read status check
   - Before substantial citadel reads in a session, the integration causes `maester status` to run and the result to be observed by the host agent
   - On a `behind` or `failed` verdict, the host agent surfaces the verdict to the developer and offers to run `maester sync` (scoped, when status returned specific behind sources) before proceeding
   - On an `up-to-date` verdict, no further user-facing prompt occurs and the read proceeds
   - On agent platforms that support hooks / pre-tool automation, the check is wired as an automated pre-read hook; on platforms that do not, the same behavior is encoded as explicit instruction the host agent is told to follow
   - The integration tolerates the absence of network access — a `failed` verdict due to no network is surfaced as informational and the read still proceeds (the agent is told to flag potential staleness in its answer)
 
-- [ ] **P0**: A standalone CLI command installs, upgrades, and adjusts the Grand Maester
+- [x] **P0**: A standalone CLI command installs, upgrades, and adjusts the Grand Maester
   - A single CLI surface (e.g., `maester skill ...`) exposes at minimum: install (idempotent), upgrade (refresh installed artifacts to match the local `maester` version), and add-target / switch-target (install additional or different agent targets without reinstalling the rest)
   - Each subcommand is invokable from a citadel-bearing repository; running from a non-citadel directory exits with a clear error and a non-zero exit code
   - Running install when the skill is already installed for the chosen target performs an idempotent refresh (no duplication, no clobbering of user-added content in managed regions)
   - The command's help output names the supported v1 targets and points the user at the install / upgrade / add-target verbs
 
-- [ ] **P0**: Installs and upgrades are idempotent and preserve user-added content
+- [x] **P0**: Installs and upgrades are idempotent and preserve user-added content
   - Running install twice for the same target leaves the artifacts byte-identical to a single install
   - Upgrading an artifact updates only the managed region; content the user added outside the managed region is preserved
   - When an existing artifact is detected, the install / upgrade describes what it will change before writing, and confirms or proceeds based on a non-destructive default
   - No artifact is silently deleted by an install or upgrade
 
-- [ ] **P1**: Outdated installed skill is detected and an upgrade is offered
+- [x] **P1**: Outdated installed skill is detected and an upgrade is offered
   - The standalone command can compare the installed artifacts' embedded version marker against the running `maester` version and report whether an upgrade is available
   - When an upgrade is available, the upgrade subcommand applies it to every installed target in one run
   - If no targets are installed, the command reports that clearly and exits without writing anything
 
-- [ ] **P1**: A citadel-aware helper exists for the installed integration to shell out to
+- [x] **P1**: A citadel-aware helper exists for the installed integration to shell out to
   - The installed artifacts may delegate well-defined runtime queries to a `maester` subcommand instead of embedding all instruction text inline — e.g., "summarize current status as one line" or "list canon files relevant to topic X"
   - The helper's output is stable enough to be consumed by an agent without retraining (versioned output shape)
   - The helper has no side effects on the citadel destination directories or provenance markers (read-only, like [Citadel Status](citadel-status.md))
 
-- [ ] **P1**: Generic `AGENTS.md` target produces an agent-agnostic instruction file
+- [x] **P1**: Generic `AGENTS.md` target produces an agent-agnostic instruction file
   - The generic target writes (or updates) a single Markdown file at a conventional location in the citadel repository
   - The file's content encodes the same citadel-, state-, and freshness-awareness as the named-agent targets, in instruction-only form (no hook scripts)
   - This is the fallback any agent platform that reads project-level instructions can use without per-platform support
 
-- [ ] **P2**: User can install the Grand Maester non-interactively via flags
+- [x] **P2**: User can install the Grand Maester non-interactively via flags
   - The standalone install accepts a flag-driven mode that specifies the target(s) without prompting (e.g., for CI bootstrapping or scripted setup)
   - Flag-driven install fails with a clear error and a non-zero exit code if any selected target is unknown
   - Interactive install remains the default when no flags are passed
