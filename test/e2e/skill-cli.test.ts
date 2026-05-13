@@ -2,7 +2,7 @@ import { execFile as execFileCb } from "node:child_process";
 import { promises as fs } from "node:fs";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type TempRepo, makeTmpRepo } from "../helpers/tmp-repo.js";
 
 const execFile = promisify(execFileCb);
@@ -30,10 +30,6 @@ async function writeCitadelYaml(repo: TempRepo, baseDir = "citadel"): Promise<vo
 }
 
 let repo: TempRepo;
-
-beforeAll(async () => {
-  await execFile("pnpm", ["run", "build"], { cwd: REPO_ROOT });
-}, 90_000);
 
 beforeEach(async () => {
   repo = await makeTmpRepo();

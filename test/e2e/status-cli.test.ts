@@ -1,7 +1,7 @@
 import { execFile as execFileCb } from "node:child_process";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { writeCitadelConfig } from "../../src/core/config/writer.js";
 import { runSync } from "../../src/core/sync/runner.js";
 import type { CitadelConfig } from "../../src/schemas/citadel.js";
@@ -51,10 +51,6 @@ async function pushNewCommit(
 
 let repo: TempRepo;
 let remotes: FixtureRemote[] = [];
-
-beforeAll(async () => {
-  await execFile("pnpm", ["run", "build"], { cwd: REPO_ROOT });
-}, 90_000);
 
 beforeEach(async () => {
   repo = await makeTmpRepo();

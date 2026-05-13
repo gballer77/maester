@@ -2,7 +2,7 @@ import { execFile as execFileCb } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { writeCitadelConfig } from "../../src/core/config/writer.js";
 import { type FixtureRemote, createBareRemote } from "../helpers/fixture-remote.js";
 import { type TempRepo, makeTmpRepo } from "../helpers/tmp-repo.js";
@@ -29,10 +29,6 @@ async function runCli(
 
 let repo: TempRepo;
 let remotes: FixtureRemote[] = [];
-
-beforeAll(async () => {
-  await execFile("pnpm", ["run", "build"], { cwd: REPO_ROOT });
-}, 90_000);
 
 beforeEach(async () => {
   repo = await makeTmpRepo();

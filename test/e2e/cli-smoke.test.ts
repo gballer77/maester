@@ -1,7 +1,7 @@
 import { execFile as execFileCb } from "node:child_process";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 const execFile = promisify(execFileCb);
 const REPO_ROOT = resolve(__dirname, "..", "..");
@@ -21,10 +21,6 @@ async function run(args: string[]): Promise<{ stdout: string; stderr: string; co
 }
 
 describe("CLI smoke", () => {
-  beforeAll(async () => {
-    await execFile("pnpm", ["run", "build"], { cwd: REPO_ROOT });
-  }, 60_000);
-
   it("prints help text on --help", async () => {
     const { stdout, code } = await run(["--help"]);
     expect(code).toBe(0);

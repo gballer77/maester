@@ -25,6 +25,7 @@ export default defineConfig({
     pool: "forks",
     passWithNoTests: true,
     testTimeout: 30_000,
+    globalSetup: ["./test/setup/global-build.ts"],
     poolOptions: {
       forks: {
         singleFork: false,
