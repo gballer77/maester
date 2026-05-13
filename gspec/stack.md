@@ -180,6 +180,8 @@ Not applicable at current scale. If aggregation runs grow into the multi-minute 
 | Git operations | `simple-git` | Typed wrapper over the user's installed `git` binary. |
 | HTTP client (planned) | `undici` / native `fetch` | Native to Node 24; high-performance. |
 | Globbing | `globby` | Source-document selectors in configs. |
+| Pattern matching | `picomatch` | Pure-pattern matching of a path string against a glob (no FS lookup). Used by the state-tag resolver to find which `includes` / `documents` entry produced a given materialized file. Already present transitively via `globby` / `fast-glob`; declaring it directly avoids depending on transitive resolution. |
+| Markdown frontmatter | `gray-matter` | Parse / round-trip YAML frontmatter on markdown documents. Used by the state-tag reader/writer for `.md` files. |
 | Path handling | `node:path`, `pathe` | Cross-platform normalization. |
 | OS keychain (planned) | `keytar` or `@napi-rs/keyring` | Future OAuth token storage. |
 

@@ -31,6 +31,7 @@ This is a single-package, ESM-only Node.js library that ships a CLI binary. Ther
 | [Maester Configuration](features/maester-configuration.md) | `src/cli/commands/publish.ts` (interactive flow) + `src/core/config/` (write + validate maester.yaml). No script scaffolding. |
 | [Maester Sync](features/maester-sync.md) | `src/cli/commands/sync.ts` calling `src/core/sync/runner.ts`, which calls `src/core/sources/fetcher.ts.fetchSource()` for each entry and orchestrates `src/core/git/`, `src/core/auth/`, and `src/core/sync/stage.ts`. The single fetcher branches internally on whether the source has a citadel-side `includes` list (skip remote-manifest discovery) or not (consult the remote's `maester.yaml`). |
 | [Citadel Base Directory](features/citadel-base-directory.md) | Optional top-level `baseDir` field in `src/schemas/citadel.ts`; `src/core/config/paths.ts` exposes a single `defaultDestinationFor(repoRoot, sourceName, baseDir)` chokepoint reused by `src/core/sync/runner.ts`, `src/core/init/finalize.ts`, and the `superRefine` collision check. `baseDir` prompt added to `src/cli/commands/init.ts`. |
+| [Document State Tagging](features/document-state-tagging.md) | New `src/core/state/` cluster (`schema.ts`, `format.ts`, `markdown.ts`, `html.ts`, `yaml.ts`, `json.ts`, `plaintext.ts`, `applier.ts`). Schema additions: `state` field on `PublishedDocument`, enriched object form (`{ path, state }`) on `Source.includes`. The applier slots into `src/core/sync/runner.ts` between staging and atomic promote — every materialized file in a supported format carries its resolved state inline at the citadel destination. |
 
 ---
 
@@ -73,6 +74,15 @@ maester/
 │   │   │   ├── runner.ts                # Orchestrate per-source fetch + stage + promote
 │   │   │   ├── stage.ts                 # Write-to-temp, then rename for atomic promote
 │   │   │   └── provenance.ts            # Read/write .maester-source.json marker
+│   │   ├── state/                       # Document state tagging (draft/canon)
+│   │   │   ├── schema.ts                # State type + parseState() chokepoint
+│   │   │   ├── format.ts                # Extension -> (parser, writer) pair
+│   │   │   ├── markdown.ts              # YAML frontmatter via gray-matter
+│   │   │   ├── html.ts                  # First-line <!-- state: ... --> (before DOCTYPE)
+│   │   │   ├── yaml.ts                  # Top-level state: key via eemeli/yaml
+│   │   │   ├── json.ts                  # Top-level state property
+│   │   │   ├── plaintext.ts             # Line-1 'state: <value>' for .txt
+│   │   │   └── applier.ts               # Walk staged dest -> resolve -> write back
 │   │   └── errors.ts                    # Tagged error classes (ConfigError, AuthError, ...)
 │   ├── schemas/
 │   │   ├── citadel.ts                   # zod schema for citadel.yaml + inferred types
@@ -170,11 +180,15 @@ erDiagram
         string name PK "unique within citadel"
         string url "https or ssh git remote"
         string ref "branch/tag/sha; default = remote HEAD"
-        string[] includes "optional; when set, min 1; bypasses remote manifest"
+        IncludeEntry[] includes "optional; when set, min 1; bypasses remote manifest"
         AuthRef auth "discriminated union"
         string destination "optional override; repo-relative"
         string description "optional; surfaced in verbose output"
         string[] tags "optional; surfaced in verbose output"
+    }
+    IncludeEntry {
+        string path "repo-relative file or glob"
+        enum state "draft, canon; optional"
     }
     AuthRef {
         enum type "none, token"
@@ -201,6 +215,7 @@ erDiagram
         string description "optional"
         string category "optional"
         string[] tags "optional"
+        enum state "draft, canon; optional"
     }
 ```
 
@@ -229,7 +244,7 @@ Cross-array invariants (enforced by a Zod `.superRefine` on the parsed document,
 | `name` | string | Required. Slug shape: `^[a-z0-9][a-z0-9-]*$`. Unique within `sources`. |
 | `url` | string | Required. Must parse as `https://`, `ssh://`, `file://`, or `git@host:path` form. No whitespace. |
 | `ref` | string | Optional. When absent, the remote's default branch is used at sync time. |
-| `includes` | string[] | Optional. When present, length ≥ 1. Each entry is a repo-relative file path or `globby`-syntax glob; same shape validation as `PublishedDocument.path` (no leading `/`, no `..`, no whitespace-only entries). When set, the citadel owns the filter set and the remote `maester.yaml` is not consulted; when unset, sync looks for a `maester.yaml` manifest on the remote and uses its globs. |
+| `includes` | `(string \| IncludeEntry)[]` | Optional. When present, length ≥ 1. Each entry is either a bare string (the path/glob) or an object `{ path: string; state?: "draft" \| "canon" }`. The path uses the same shape validation as `PublishedDocument.path` (no leading `/`, no `..`, no whitespace-only entries; `globby` syntax). The optional `state` is the includes-driven rule-level state applied to files matched by that entry — see [Document State Tagging](features/document-state-tagging.md) and §6.8. When `includes` is set, the citadel owns the filter set and the remote `maester.yaml` is not consulted; when unset, sync looks for a `maester.yaml` manifest on the remote and uses its globs. |
 | `auth` | `AuthRef` | Optional; defaults to `{ type: "none" }`. |
 | `destination` | string | Optional. Repo-relative path. Validation: no leading `/`, no `..` segments, no symlinks. Default: `<baseDir>/<name>/` (where `baseDir` defaults to `citadel` — see `CitadelConfig.baseDir`). |
 | `description` | string | Optional. Free text; surfaced in `--verbose` output alongside the entry name. |
@@ -282,8 +297,9 @@ Written atomically as the last step of a successful per-source sync. Used by fut
 | `description` | string | Optional. Free text. |
 | `category` | string | Optional. Slug shape. |
 | `tags` | string[] | Optional. Each tag is a slug. |
+| `state` | `"draft" \| "canon"` | Optional. Manifest-driven rule-level state for files matched by this entry — see [Document State Tagging](features/document-state-tagging.md) and §6.8. Unknown values are rejected by the `zod` schema at parse time. |
 
-Introduced by: [Maester Configuration](features/maester-configuration.md).
+Introduced by: [Maester Configuration](features/maester-configuration.md). The `state` field is introduced by [Document State Tagging](features/document-state-tagging.md).
 
 ### Relationship Notes
 
@@ -378,6 +394,8 @@ Each domain operation is a pure function (or a closely-related set of functions)
 | Sync runner | `src/core/sync/runner.ts` | For each source: call `fetchSource` → stage → promote → write provenance marker. Aggregates per-source results. Never throws on a single-source failure; per-source failures are returned as `SyncOutcome` values. |
 | Staging | `src/core/sync/stage.ts` | Write all output to `<destination>.tmp-<rand>`, then `fs.rename` to the final destination. Old destination is removed under a temp name and unlinked after the rename succeeds. |
 | Provenance | `src/core/sync/provenance.ts` | Read/write `.maester-source.json` inside each destination directory. Validates `maesterName` matches before overwriting. |
+| State applier | `src/core/state/applier.ts` | Walk a staged destination tree, resolve each file's state via the inline > rule > default precedence, and write it back through the format-specific writer. Returns a `{ canon, draft, untagged }` breakdown plus per-file warnings. See §6.8. |
+| State format dispatch | `src/core/state/format.ts` | Map a file extension to a `(parser, writer)` pair. Supported in v1: `.md`, `.html` / `.htm`, `.yaml` / `.yml`, `.json`, `.txt`. Unsupported extensions return `undefined` (the file is counted as untagged and no inline state is written). |
 | Gitignore | `src/core/repo/gitignore.ts` | Append missing entries to `.gitignore`; never reorder or rewrite. Returns the set of lines that were added. |
 
 ### 6.4 External Integrations
@@ -403,6 +421,7 @@ sequenceDiagram
     participant Fetcher as src/core/sources/fetcher.ts
     participant Git as src/core/git/client.ts
     participant Stage as src/core/sync/stage.ts
+    participant Applier as src/core/state/applier.ts
     participant FS as Filesystem
 
     U->>CLI: maester sync
@@ -423,9 +442,12 @@ sequenceDiagram
         Git-->>Fetcher: resolved commit SHA + materialized tree
         Fetcher-->>Runner: FetchedTree { name, cacheDir, commitSha, filterSet, warnings }
         Runner->>Stage: copy filtered tree to <destination>.tmp-XXXX
+        Stage->>Applier: applyState(stagedDir, filterSet)
+        Applier->>FS: read each file, resolve state, write inline tag (or skip if byte-identical)
+        Applier-->>Stage: { canon, draft, untagged } + warnings
         Stage->>FS: write provenance marker (filterSet)
         Stage->>FS: rename(.tmp-XXXX, destination) [atomic]
-        Stage-->>Runner: SyncOutcome { added | updated | unchanged | failed }
+        Stage-->>Runner: SyncOutcome { added | updated | unchanged | failed, stateBreakdown, warnings }
     end
     Runner-->>CLI: SyncResult { outcomes[] }
     CLI->>U: human-readable summary or JSON stream
@@ -541,6 +563,68 @@ Partial clone (`--filter=blob:none`) requires `git ≥ 2.27` (May 2020). `src/co
 It would be technically straightforward to let `citadel.yaml` always override the remote's `maester.yaml` with its own `paths:` filter. The architecture deliberately does not allow that *layering*: when a source is manifest-driven (no citadel-side `includes`), the remote is the sole authority on what it publishes. A citadel-side override on top of the manifest would let a citadel operator pull files the remote did not include — defeating the publish-surface contract in [maester-configuration.md](features/maester-configuration.md) §3. If a citadel needs a narrower view than a manifest offers, that is a conversation to have with the source repo's maintainers, not a config toggle.
 
 The includes-driven mode deliberately inverts this contract: the source has no manifest and no opinion about what it publishes, so the citadel **must** declare what to pull — `includes` is authoritative and `maester.yaml` (if any) is ignored. The trade-off is upkeep: when the source repo restructures, the citadel's `includes` may need to be updated, and the P1 zero-files-matched warning is the architecture's tripwire for that case. That upkeep cost is intrinsic to consuming a source that did not opt into the publish-surface contract; it is not a defect, and there is no design lever that reduces it without giving up the contract itself.
+
+### 6.8 Document State Tagging
+
+[Document State Tagging](features/document-state-tagging.md) introduces a per-file `state` (`"draft"` or `"canon"`) that is resolved at sync time and materialized **inline** in every supported file at the citadel destination. The architecture implements it as a single resolve-then-apply pass over the staged tree, inserted between the sparse-checkout copy and the atomic promote in §6.6. The state-tagging surface never touches the original maester sources — only the citadel's staged copy is rewritten.
+
+#### Module placement
+
+| Module | Responsibility |
+|---|---|
+| `src/core/state/schema.ts` | The `State = "draft" \| "canon"` type and a `parseState(value: unknown): State \| undefined` chokepoint used by both config schemas and the inline parsers. The default state constant (`"draft"`) lives here as well so every site references the same literal. |
+| `src/core/state/format.ts` | Maps a file extension to a `{ parse, write }` pair. v1 dispatch: `.md` → markdown, `.html`/`.htm` → html, `.yaml`/`.yml` → yaml, `.json` → json, `.txt` → plaintext. Anything else returns `undefined`; the file is counted as `untagged` and no inline state is written. |
+| `src/core/state/markdown.ts` | YAML-frontmatter via [`gray-matter`](https://github.com/jonschlinkert/gray-matter). Read returns `{ state }` from `matter(data).data.state`. Write mutates the data object and re-stringifies via `matter.stringify(body, data)`, which round-trips existing frontmatter; when no frontmatter exists, gray-matter prepends a fresh `---\nstate: <value>\n---\n` block. |
+| `src/core/state/html.ts` | First-line HTML comment of the form `<!-- state: <value> -->`. Written **before** any `<!DOCTYPE>` directive — mirroring this project's own `gspec/style.html` `<!-- spec-version: v1 -->` convention. Detection regex against line 1: `^<!--\s*state:\s*(draft\|canon)\s*-->$`. Replace if matched; otherwise prepend the comment + newline. |
+| `src/core/state/yaml.ts` | Top-level `state:` key via `eemeli/yaml` document model (comment-preserving). Read: `doc.get("state")`. Write: `doc.set("state", value)`, then `doc.toString()`. When the document is a top-level array or scalar (i.e. not a mapping), the file is treated as unsupported — no error, no write. |
+| `src/core/state/json.ts` | Top-level `state` property. Read uses `JSON.parse`. Write re-serializes via `JSON.stringify(obj, null, indent)` where `indent` is inferred from the source (preserves a 2-space file as 2-space). When the document is a top-level array or non-object, the file is treated as unsupported. |
+| `src/core/state/plaintext.ts` | A single first line of the form `state: <value>` (case-sensitive). Detection regex against line 1: `^state:\s+(draft\|canon)\s*$`. Replace if matched; otherwise prepend. |
+| `src/core/state/applier.ts` | Top-level orchestration. Given a staged destination + a rule resolver (the source's filter set bound to its rule states), walks every file, parses inline state, resolves the final state, and writes it back. Skips the write entirely when the existing inline state already matches the resolved value (idempotency / no spurious diffs). Returns `{ canon, draft, untagged }` plus a list of `BadInlineStateWarning` / `DisagreementWarning` records. |
+
+#### Resolution algorithm
+
+For each materialized file under a staged destination `<destination>.tmp-XXXX/`:
+
+1. Look up the format via `format.ts`. If unsupported, increment `untagged` and skip.
+2. Read the file once. The format's parser returns one of `{ state: "draft" \| "canon" }`, `{ invalid: rawValue }`, or `undefined`.
+3. If `state` is valid → resolved state is that value; source-of-truth = `inline`. Go to step 6.
+4. If `invalid` → emit a `BadInlineStateWarning { file, raw }` for the source, then **fall through** to step 5 as if no inline state were present (per [Document State Tagging P0](features/document-state-tagging.md) — invalid inline values are warning-level, not failures, so a single typo never kills a file or a source).
+5. Rule resolution. Match the file's source-relative path against each entry in the source's filter set (`PublishedDocument[]` for manifest-driven, `IncludeEntry[]` for includes-driven). Pattern matching uses `picomatch.isMatch(filePath, pattern, { dot: false, nocase: false })`. The **first matching entry** with a non-empty `state` is the rule-level state; source-of-truth = `rule`. If no entry matches, or every matching entry leaves `state` unset, the resolved state is the default `"draft"`; source-of-truth = `default`.
+6. Pass the resolved state to the format's writer. The writer returns either the original bytes (no inline change needed — idempotent) or new bytes; the applier writes only when the bytes changed.
+7. Increment the per-state counter (`canon` or `draft`). When verbose output is enabled, append a `{ file, state, sourceOfTruth }` record to the verbose stream.
+8. (P2) When step 3 produced `inline` *and* step 5 would have produced a different state, emit a `DisagreementWarning { file, inline, rule }`. The inline value still wins; the warning is informational.
+
+`picomatch` is already present transitively via `globby` / `fast-glob` and is declared as a direct dependency in [stack.md §11](stack.md) so the import does not rely on transitive resolution.
+
+#### Schema chokepoint
+
+- **Maester config** (`src/schemas/maester.ts`). `PublishedDocument` gains `state: z.enum(["draft", "canon"]).optional()`. The schema remains `.strict()`, so any other value is rejected at parse time with the offending field path.
+- **Citadel config** (`src/schemas/citadel.ts`). `Source.includes` becomes `z.array(z.union([includePathString, z.object({ path: includePathString, state: z.enum(["draft", "canon"]).optional() }).strict()])).min(1).optional()`. The single `includePathString` schema is the shared shape validator (no leading `/`, no `..`, no whitespace-only); whichever shape the entry takes, the path validation is identical to today's bare-string form.
+- **Inline parsers.** All five inline parsers route their raw value through `parseState()` (`src/core/state/schema.ts`). The function returns `"draft" \| "canon"` for valid input, `{ invalid: raw }` for explicitly-present-but-out-of-vocabulary input, and `undefined` for missing input.
+
+#### Sync output shape
+
+The per-source `SyncOutcome` returned by `src/core/sync/runner.ts` gains:
+
+```ts
+type StateBreakdown = { canon: number; draft: number; untagged: number };
+type StateWarning =
+  | { type: "bad-inline-state"; file: string; raw: string }
+  | { type: "disagreement"; file: string; inline: State; rule: State };
+
+type SyncOutcome = /* existing fields */ & {
+  stateBreakdown: StateBreakdown;
+  stateWarnings: StateWarning[];
+};
+```
+
+The human-readable renderer prints the breakdown on the source's summary line (`canon: N · draft: N · untagged: N`). `--json` includes both fields verbatim per source. The verbose-output source-of-truth list is rendered as an indented sub-list under each source when `--verbose` is in effect.
+
+#### What state tagging never does
+
+- It never modifies the maester's source files. Only files in the citadel's staged destination are touched.
+- It never tags a file whose extension is not in the v1 dispatch table (binary assets, PDFs, images). Those files are materialized untouched and reported as `untagged` in the breakdown. A future sidecar-metadata feature can close that gap; this architecture does not.
+- It never overrides an inline state declared by a file's author — even when a maester-config or citadel-config rule disagrees. The optional P2 `DisagreementWarning` exists to make that override visible without changing its outcome.
 
 ---
 
@@ -698,11 +782,18 @@ sources:
   # The citadel owns the `includes` list. Update it if the upstream repo
   # restructures — the "no files matched" warning will surface drift on the
   # next sync.
+  #
+  # Two entry shapes are accepted: a bare string (just the path/glob) or an
+  # object with an optional `state: draft|canon` for files matched by that
+  # entry. Files without an inline state get the rule's state; files without
+  # either fall through to the default (draft). A file's own inline state
+  # always wins over a rule.
   - name: react-docs
     url: https://github.com/facebook/react.git
     ref: main
     includes:
-      - docs/**/*.md
+      - path: docs/**/*.md
+        state: canon
       - README.md
     description: Upstream React documentation snapshot.
 
@@ -735,20 +826,28 @@ schemaVersion: 1
 
 documents:
   # The canonical entry-point document. A single file path, no glob.
+  # Marked `canon` — consuming citadels will surface it with state=canon
+  # in its inline frontmatter unless the file itself declares otherwise.
   - path: README.md
     category: readme
     description: Service overview, local development setup, and ownership.
+    state: canon
 
   # An ADR (architecture decision records) directory exposed via a glob.
-  # Consuming citadels surface every matching file at sync time.
+  # Consuming citadels surface every matching file at sync time. The whole
+  # group is marked `canon` here; an individual ADR can still opt back to
+  # `draft` by adding `state: draft` to its own frontmatter.
   - path: docs/adr/*.md
     category: adr
     description: Architecture decisions made on this service.
     tags:
       - architecture
       - decisions
+    state: canon
 
-  # On-call runbooks, recursively.
+  # On-call runbooks, recursively. Left without an explicit `state` field
+  # so each runbook governs its own state via inline frontmatter; runbooks
+  # that don't declare one will fall through to the default (draft).
   - path: docs/runbooks/**/*.md
     category: runbook
     description: On-call procedures and incident playbooks.
@@ -761,9 +860,10 @@ documents:
     category: api
     tags:
       - public-api
+    state: canon
 
   # A single specific file with no metadata at all — description, category,
-  # and tags are all optional.
+  # tags, and state are all optional.
   - path: CHANGELOG.md
 ```
 
@@ -973,6 +1073,54 @@ The init walkthrough runs the same validator before writing the file so collisio
 3. **Init-time prompt.** The citadel-init walkthrough adds one prompt for the base directory, pre-filled with `citadel` and validated against the same shape rule as the schema. When the user accepts the default, init **omits** the field from the generated YAML — accepting the default produces a config indistinguishable from today's, minimizing the diff against pre-existing projects. When the user enters anything else, init writes the explicit `baseDir:` line.
 4. **Non-destructive change.** If the user later edits `baseDir` and re-syncs, the runner writes to the newly-resolved destinations. Directories under the previous base are left in place — no deletion, no move, no warning. The destination-clobber guard remains intact because each managed directory still owns its `ProvenanceMarker`; orphaned ones are inert.
 5. **Cache is unaffected.** The `.maester/cache/<source-name>/` layout is orthogonal to `baseDir`. The cache is keyed by source name only.
+
+#### Gap 16 — Handling of out-of-vocabulary inline state values
+
+**What's missing.** [Document State Tagging](features/document-state-tagging.md) declares that the inline state vocabulary is exactly `draft` and `canon`, but the original P0 capability wording said an inline value outside that set "fails the file" — without saying whether that takes the source down with it, and without distinguishing config-time validation (where strict rejection is unambiguously correct) from sync-time inline parsing (where granularity is a design choice).
+
+**Why it matters.** A single typo in one inline tag should not vaporize an entire sync. But silently demoting a known-wrong value to `draft` is also wrong — the user's intent was clearly to declare a state, and the typo should be visible.
+
+**Resolution.** (User-confirmed.) Maester-config and citadel-config schemas continue to **reject** unknown state values at parse time via `.strict()` `zod` schemas — these are committed configs, and typos are caught by the loader. **Inline** state parsing softens to a warning: when a file's inline `state:` value is present but not `draft` or `canon`, `src/core/state/applier.ts` emits a `BadInlineStateWarning { file, raw }`, treats the file as if no inline state were declared, and falls through to rule/default resolution. The file is still materialized; the source is not failed; the warning rides along in the per-source `SyncOutcome` and is surfaced in both human and `--json` output. This keeps the inline-state surface forgiving while still making the mistake visible. The PRD's P0 acceptance criterion has been reconciled to match this behavior.
+
+#### Gap 17 — HTML state-comment placement relative to DOCTYPE
+
+**What's missing.** [Document State Tagging](features/document-state-tagging.md) names HTML as a supported inline format with the comment `<!-- state: <value> -->` but does not say where the comment sits when a `<!DOCTYPE>` is present.
+
+**Why it matters.** The parser's detection regex and the writer's insertion site must agree. Two valid options exist: before DOCTYPE (cheap to detect — always line 1) or after DOCTYPE (more strictly standard HTML).
+
+**Resolution.** (User-confirmed.) The state comment is the **first line** of the file, before any `<!DOCTYPE>`. This mirrors this project's own `gspec/style.html` convention (`<!-- spec-version: v1 -->` on line 1, DOCTYPE on line 2) and lets the parser detect inline state with a single line-1 read. Browsers tolerate a leading comment without affecting rendering. `src/core/state/html.ts` writes and detects on line 1; the writer pushes any existing line-1 state comment out before re-inserting the resolved one, and otherwise prepends a fresh comment + newline.
+
+#### Gap 18 — Frontmatter parsing implementation
+
+**What's missing.** [Document State Tagging](features/document-state-tagging.md) requires reading and writing a `state` field inside markdown YAML frontmatter. The PRD does not name a library; the stack (`gspec/stack.md`) lists `eemeli/yaml` for general YAML parsing but no frontmatter-specific helper.
+
+**Why it matters.** Hand-rolling frontmatter detection is small but error-prone (CRLF, optional trailing newline, embedded `---` inside the body). A dedicated library round-trips frontmatter without surprises.
+
+**Resolution.** (User-confirmed.) Add `gray-matter` as a direct runtime dependency. `src/core/state/markdown.ts` reads via `matter(buf)` (returning `{ data, content }`), mutates `data.state`, and writes via `matter.stringify(content, data)`. `gray-matter` already round-trips existing frontmatter and prepends a new block when none exists. The stack manifest in [stack.md §11](stack.md) reflects the new dependency. Bundle-size impact is negligible at CLI scale (~50KB transitive); the trade-off favors correctness on edge cases over saving a small dependency.
+
+#### Gap 19 — Where state-apply sits in the sync pipeline
+
+**What's missing.** Document State Tagging requires that every materialized file at the citadel carry an inline state by the time the destination is promoted. The original `runner.ts` flow (copy filtered tree → write provenance → atomic rename) has no slot for a file-rewriting pass.
+
+**Why it matters.** If state-apply runs against the promoted destination, a crash mid-rewrite leaves users with a partially-tagged destination — violating the "destination always reflects a consistent fetch" invariant. If it runs too early (e.g., against the cache before the staging copy), it would mutate the cache directory, defeating the cache's reuse goal.
+
+**Resolution.** State-apply runs against the **staged copy** `<destination>.tmp-XXXX/` between the filtered-tree copy and the atomic `rename`. The staging directory is owned by sync and discarded on failure; rewriting files inside it is consistent with the existing temp-then-rename model. The §6.6 sequence diagram has been updated to show the new step. The promoted destination is therefore either fully tagged (success) or absent (a previous-run promote remains intact, untouched). The cache directory is never mutated by state-apply.
+
+#### Gap 20 — Pattern matching strategy for rule resolution
+
+**What's missing.** Rule-level state resolution requires matching a file's path against a glob entry from the source's filter set (`PublishedDocument[]` or `IncludeEntry[]`). The architecture previously used `globby` for filesystem-walk globbing but had no pure-pattern-matching primitive.
+
+**Why it matters.** Rule resolution runs per-file, in-memory, against patterns we already know — no FS scan is needed or wanted. Using `globby` would re-scan the disk N times.
+
+**Resolution.** `picomatch.isMatch(filePath, pattern, { dot: false, nocase: false })` is the chokepoint, called from `src/core/state/applier.ts`. `picomatch` is already present transitively via `globby` → `fast-glob`; declaring it directly in [stack.md §11](stack.md) makes the import contract explicit and survives transitive churn. Configuration (`dot: false, nocase: false`) matches `globby`'s default so a path that one tool considers a match, the other does too.
+
+#### Gap 21 — First-match wins when multiple filter-set entries match a file
+
+**What's missing.** A single file can be matched by more than one entry in a source's filter set (e.g. `docs/**/*.md` and `docs/runbooks/**/*.md` both match the same runbook). The PRD did not specify which entry's `state` applies.
+
+**Why it matters.** Determinism. Without a fixed rule the resolved state could drift with rearrangements of the filter list.
+
+**Resolution.** **First-match wins**, in source-file order (the order the entries appear in `maester.yaml`'s `documents:` or `citadel.yaml`'s `includes:`). The applier iterates the filter set in array order and stops at the first entry whose pattern matches the file under test; that entry's `state` (if set) is the rule-level state. If the matching entry has no `state`, the resolution proceeds to the default (`draft`) — it does **not** fall back to the next matching entry. This keeps the rule "the entry the author put first applies" without surprise. Users who want a narrow rule to win over a broad one simply list the narrow rule first.
 
 ### Assumptions
 
