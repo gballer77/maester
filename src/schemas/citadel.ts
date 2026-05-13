@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { z } from "zod";
+import { StateSchema } from "../core/state/schema.js";
 
 export const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
 export const ENV_VAR_RE = /^[A-Z][A-Z0-9_]*$/;
@@ -42,6 +43,32 @@ export const AuthRefTokenSchema = z
 
 export const AuthRefSchema = z.discriminatedUnion("type", [AuthRefNoneSchema, AuthRefTokenSchema]);
 
+const IncludesPathSchema = z
+  .string()
+  .min(1)
+  .refine(
+    isSafeIncludesEntry,
+    "includes entry must be a repo-relative path or glob; no leading '/' and no '..'",
+  );
+
+export const IncludeEntryObjectSchema = z
+  .object({
+    path: IncludesPathSchema,
+    state: StateSchema.optional(),
+  })
+  .strict();
+
+export const IncludeEntrySchema = z.union([IncludesPathSchema, IncludeEntryObjectSchema]);
+
+export function normalizeIncludeEntry(entry: z.infer<typeof IncludeEntrySchema>): {
+  path: string;
+  state?: z.infer<typeof StateSchema>;
+} {
+  if (typeof entry === "string") return { path: entry };
+  if (entry.state === undefined) return { path: entry.path };
+  return { path: entry.path, state: entry.state };
+}
+
 export const SourceSchema = z
   .object({
     name: z
@@ -51,15 +78,7 @@ export const SourceSchema = z
     url: z.string().refine(isValidGitUrl, "url must be https://, ssh://, or git@host:path"),
     ref: z.string().min(1).optional(),
     includes: z
-      .array(
-        z
-          .string()
-          .min(1)
-          .refine(
-            isSafeIncludesEntry,
-            "includes entry must be a repo-relative path or glob; no leading '/' and no '..'",
-          ),
-      )
+      .array(IncludeEntrySchema)
       .min(1, "includes must declare at least one entry when present")
       .optional(),
     auth: AuthRefSchema.optional(),
@@ -145,5 +164,6 @@ export const CitadelConfigSchema = z
   });
 
 export type AuthRef = z.infer<typeof AuthRefSchema>;
+export type IncludeEntry = z.infer<typeof IncludeEntrySchema>;
 export type Source = z.infer<typeof SourceSchema>;
 export type CitadelConfig = z.infer<typeof CitadelConfigSchema>;

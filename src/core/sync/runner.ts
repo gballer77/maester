@@ -7,6 +7,13 @@ import { CACHE_SUBDIR, cachePathForSource, defaultDestinationFor } from "../conf
 import { AuthError, MaesterError, RefNotFoundError } from "../errors.js";
 import { clearWorktree } from "../git/client.js";
 import { type FetchWarning, type FetchedTree, fetchSource } from "../sources/fetcher.js";
+import {
+  type StateApplyDetail,
+  type StateApplyResult,
+  type StateBreakdown,
+  type StateWarning,
+  applyState,
+} from "../state/applier.js";
 import { filterSetMatches, readProvenanceMarker } from "./provenance.js";
 import { stageDestination } from "./stage.js";
 
@@ -19,6 +26,9 @@ export type SyncOutcome = {
   ref: string | undefined;
   commitSha?: string;
   warnings: FetchWarning[];
+  stateBreakdown?: StateBreakdown;
+  stateWarnings?: StateWarning[];
+  stateDetails?: StateApplyDetail[];
   error?: string;
 };
 
@@ -141,7 +151,7 @@ async function processEntry(
       };
     }
 
-    await stageDestination({
+    const stageResult = await stageDestination<StateApplyResult>({
       cacheDir: tree.cacheDir,
       destination,
       marker: {
@@ -152,7 +162,9 @@ async function processEntry(
         filterSet: tree.filterSet,
         syncedAt: new Date().toISOString(),
       },
+      beforePromote: (stagedDir) => applyState(stagedDir, tree.rules),
     });
+    const stateResult = stageResult.beforePromoteResult;
 
     const status: SyncStatus = existingMarker ? "updated" : "added";
     options.onProgress?.({ type: "staged", name: source.name, status });
@@ -163,6 +175,13 @@ async function processEntry(
       ref: source.ref,
       commitSha: tree.commitSha,
       warnings: tree.warnings,
+      ...(stateResult
+        ? {
+            stateBreakdown: stateResult.breakdown,
+            stateWarnings: stateResult.warnings,
+            stateDetails: stateResult.details,
+          }
+        : {}),
     };
   } catch (err) {
     const message = errorMessage(err);

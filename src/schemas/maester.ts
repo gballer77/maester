@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { StateSchema } from "../core/state/schema.js";
 import { SLUG_RE } from "./citadel.js";
 
 function isSafeRepoRelative(value: string): boolean {
@@ -20,6 +21,7 @@ export const PublishedDocumentSchema = z
     description: z.string().min(1).optional(),
     category: z.string().min(1).regex(SLUG_RE, "category must be a kebab-case slug").optional(),
     tags: z.array(z.string().min(1).regex(SLUG_RE, "tags must be slugs")).optional(),
+    state: StateSchema.optional(),
   })
   .strict();
 

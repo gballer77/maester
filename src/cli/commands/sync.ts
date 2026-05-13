@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import { loadCitadelConfig } from "../../core/config/loader.js";
 import { MaesterError } from "../../core/errors.js";
 import type { FetchWarning } from "../../core/sources/fetcher.js";
+import type { StateWarning } from "../../core/state/applier.js";
 import { type SyncOutcome, type SyncResult, runSync } from "../../core/sync/runner.js";
 import type { CitadelConfig } from "../../schemas/citadel.js";
 import { redactUrl } from "../../ui/logger.js";
@@ -72,6 +73,12 @@ function buildJsonOutcome(outcome: SyncOutcome): Record<string, unknown> {
   if (outcome.warnings.length > 0) {
     base.warnings = outcome.warnings.map(serializeWarning);
   }
+  if (outcome.stateBreakdown !== undefined) {
+    base.stateBreakdown = outcome.stateBreakdown;
+  }
+  if (outcome.stateWarnings && outcome.stateWarnings.length > 0) {
+    base.stateWarnings = outcome.stateWarnings;
+  }
   if (outcome.error !== undefined) base.error = redactUrl(outcome.error);
   return base;
 }
@@ -87,12 +94,13 @@ function serializeWarning(warning: FetchWarning): Record<string, unknown> {
 function renderHumanSummary(ctx: CliContext, result: SyncResult): void {
   for (const outcome of result.outcomes) {
     const shortSha = outcome.commitSha?.slice(0, 7) ?? "—";
+    const stateSuffix = formatStateBreakdownSuffix(outcome);
     switch (outcome.status) {
       case "added":
-        ctx.logger.success(`${outcome.name}: added (${shortSha})`);
+        ctx.logger.success(`${outcome.name}: added (${shortSha})${stateSuffix}`);
         break;
       case "updated":
-        ctx.logger.success(`${outcome.name}: updated (${shortSha})`);
+        ctx.logger.success(`${outcome.name}: updated (${shortSha})${stateSuffix}`);
         break;
       case "unchanged":
         ctx.logger.info(`${outcome.name}: unchanged`);
@@ -106,6 +114,14 @@ function renderHumanSummary(ctx: CliContext, result: SyncResult): void {
     for (const warning of outcome.warnings) {
       ctx.logger.warning(`  ${formatWarning(warning)}`);
     }
+    for (const stateWarning of outcome.stateWarnings ?? []) {
+      ctx.logger.warning(`  ${formatStateWarning(stateWarning)}`);
+    }
+    if (ctx.flags.verbose && outcome.stateDetails && outcome.stateDetails.length > 0) {
+      for (const detail of outcome.stateDetails) {
+        ctx.logger.verbose(`  ${detail.file} — state=${detail.state} (${detail.sourceOfTruth})`);
+      }
+    }
   }
   ctx.logger.blank();
   if (result.failed > 0) {
@@ -117,4 +133,17 @@ function renderHumanSummary(ctx: CliContext, result: SyncResult): void {
 
 function formatWarning(warning: FetchWarning): string {
   return `no files matched includes — citadel-side filter set may need updating (${warning.includes.join(", ")})`;
+}
+
+function formatStateBreakdownSuffix(outcome: SyncOutcome): string {
+  const b = outcome.stateBreakdown;
+  if (!b) return "";
+  return `  canon: ${b.canon} · draft: ${b.draft} · untagged: ${b.untagged}`;
+}
+
+function formatStateWarning(warning: StateWarning): string {
+  if (warning.type === "bad-inline-state") {
+    return `${warning.file}: inline state '${warning.raw}' is not in {draft, canon} — treated as missing`;
+  }
+  return `${warning.file}: inline state '${warning.inline}' overrides rule state '${warning.rule}'`;
 }

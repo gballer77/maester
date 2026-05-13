@@ -9,25 +9,40 @@ import {
   writeProvenanceMarker,
 } from "./provenance.js";
 
-export type StageInput = {
+export type StageInput<TApply = unknown> = {
   cacheDir: string;
   destination: string;
   marker: ProvenanceMarker;
+  /**
+   * Optional hook invoked against the staged copy AFTER the cache has been
+   * copied and BEFORE the provenance marker is written + the atomic promote.
+   * Used by the state-tag applier (architecture §6.8 / §9 Gap 19) — running
+   * on the staged copy means a crash mid-rewrite leaves the previous promote
+   * intact.
+   */
+  beforePromote?: (stagedDir: string) => Promise<TApply>;
 };
 
-export type StageOutcome = {
+export type StageOutcome<TApply = unknown> = {
   staged: boolean;
   finalPath: string;
+  beforePromoteResult?: TApply;
 };
 
-export async function stageDestination(input: StageInput): Promise<StageOutcome> {
+export async function stageDestination<TApply = unknown>(
+  input: StageInput<TApply>,
+): Promise<StageOutcome<TApply>> {
   await assertDestinationSafe(input.destination, input.marker.sourceName);
   const tempDir = `${input.destination}.tmp-${Math.random().toString(36).slice(2, 10)}`;
   await mkdir(dirname(input.destination), { recursive: true });
   await mkdir(tempDir, { recursive: true });
   await copyCacheToTemp(input.cacheDir, tempDir);
+  const beforePromoteResult = input.beforePromote ? await input.beforePromote(tempDir) : undefined;
   await writeProvenanceMarker(tempDir, input.marker);
   await promoteTempToDestination(tempDir, input.destination);
+  if (beforePromoteResult !== undefined) {
+    return { staged: true, finalPath: input.destination, beforePromoteResult };
+  }
   return { staged: true, finalPath: input.destination };
 }
 

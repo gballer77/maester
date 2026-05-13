@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { CitadelConfigSchema, SourceSchema } from "../../../src/schemas/citadel.js";
+import {
+  CitadelConfigSchema,
+  SourceSchema,
+  normalizeIncludeEntry,
+} from "../../../src/schemas/citadel.js";
 
 describe("SourceSchema", () => {
   it("accepts a minimal valid source", () => {
@@ -107,6 +111,80 @@ describe("SourceSchema", () => {
       includes: ["/abs/path"],
     });
     expect(result.success).toBe(false);
+  });
+
+  it("accepts an enriched includes entry with state", () => {
+    const result = SourceSchema.safeParse({
+      name: "react-docs",
+      url: "https://github.com/facebook/react.git",
+      includes: [
+        { path: "docs/**/*.md", state: "canon" },
+        { path: "CHANGELOG.md", state: "draft" },
+      ],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts a mix of bare-string and enriched includes entries", () => {
+    const result = SourceSchema.safeParse({
+      name: "mixed",
+      url: "https://example.com/r.git",
+      includes: ["README.md", { path: "docs/**/*.md", state: "canon" }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts an enriched includes entry without a state field", () => {
+    const result = SourceSchema.safeParse({
+      name: "no-state",
+      url: "https://example.com/r.git",
+      includes: [{ path: "docs/**/*.md" }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an enriched includes entry with an unknown state value", () => {
+    const result = SourceSchema.safeParse({
+      name: "x",
+      url: "https://example.com/r.git",
+      includes: [{ path: "docs/**/*.md", state: "published" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an enriched includes entry with an unknown extra field", () => {
+    const result = SourceSchema.safeParse({
+      name: "x",
+      url: "https://example.com/r.git",
+      includes: [{ path: "docs/**/*.md", priority: "high" }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an enriched includes entry whose path is unsafe", () => {
+    const result = SourceSchema.safeParse({
+      name: "x",
+      url: "https://example.com/r.git",
+      includes: [{ path: "../escape", state: "canon" }],
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe("normalizeIncludeEntry", () => {
+  it("turns a bare string into { path }", () => {
+    expect(normalizeIncludeEntry("docs/**/*.md")).toEqual({ path: "docs/**/*.md" });
+  });
+
+  it("omits state when the enriched entry has no state", () => {
+    expect(normalizeIncludeEntry({ path: "docs/**/*.md" })).toEqual({ path: "docs/**/*.md" });
+  });
+
+  it("preserves state on the enriched entry", () => {
+    expect(normalizeIncludeEntry({ path: "docs/**/*.md", state: "canon" })).toEqual({
+      path: "docs/**/*.md",
+      state: "canon",
+    });
   });
 
   it("accepts optional description and tags", () => {

@@ -28,6 +28,27 @@ describe("PublishedDocumentSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts an entry with state=canon", () => {
+    const result = PublishedDocumentSchema.safeParse({ path: "README.md", state: "canon" });
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts an entry with state=draft", () => {
+    const result = PublishedDocumentSchema.safeParse({ path: "docs/wip.md", state: "draft" });
+    expect(result.success).toBe(true);
+  });
+
+  it("treats state as optional", () => {
+    const result = PublishedDocumentSchema.safeParse({ path: "README.md" });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.state).toBeUndefined();
+  });
+
+  it("rejects unknown state values", () => {
+    const result = PublishedDocumentSchema.safeParse({ path: "README.md", state: "published" });
+    expect(result.success).toBe(false);
+  });
+
   it("rejects unknown fields", () => {
     expect(PublishedDocumentSchema.safeParse({ path: "README.md", extra: 1 }).success).toBe(false);
   });

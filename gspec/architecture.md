@@ -32,6 +32,7 @@ This is a single-package, ESM-only Node.js library that ships a CLI binary. Ther
 | [Maester Sync](features/maester-sync.md) | `src/cli/commands/sync.ts` calling `src/core/sync/runner.ts`, which calls `src/core/sources/fetcher.ts.fetchSource()` for each entry and orchestrates `src/core/git/`, `src/core/auth/`, and `src/core/sync/stage.ts`. The single fetcher branches internally on whether the source has a citadel-side `includes` list (skip remote-manifest discovery) or not (consult the remote's `maester.yaml`). |
 | [Citadel Base Directory](features/citadel-base-directory.md) | Optional top-level `baseDir` field in `src/schemas/citadel.ts`; `src/core/config/paths.ts` exposes a single `defaultDestinationFor(repoRoot, sourceName, baseDir)` chokepoint reused by `src/core/sync/runner.ts`, `src/core/init/finalize.ts`, and the `superRefine` collision check. `baseDir` prompt added to `src/cli/commands/init.ts`. |
 | [Document State Tagging](features/document-state-tagging.md) | New `src/core/state/` cluster (`schema.ts`, `format.ts`, `markdown.ts`, `html.ts`, `yaml.ts`, `json.ts`, `plaintext.ts`, `applier.ts`). Schema additions: `state` field on `PublishedDocument`, enriched object form (`{ path, state }`) on `Source.includes`. The applier slots into `src/core/sync/runner.ts` between staging and atomic promote — every materialized file in a supported format carries its resolved state inline at the citadel destination. |
+| [Citadel Status](features/citadel-status.md) | `src/cli/commands/status.ts` (CLI binding) calling `src/core/status/runner.ts`, which calls `src/core/status/probe.ts` per source. The probe uses `git ls-remote` for the commit SHA and a one-blob partial-clone + sparse-checkout into an ephemeral temp dir for the remote `maester.yaml`. Reuses `src/core/config/loader.ts`, `src/core/auth/resolver.ts`, and `src/core/sync/provenance.ts` (read-only). Never writes to a destination, never mutates `.maester/cache/`, never rewrites a provenance marker. |
 
 ---
 
@@ -55,6 +56,7 @@ maester/
 │   │   └── commands/
 │   │       ├── init.ts                  # Citadel initialization walkthrough
 │   │       ├── publish.ts               # Maester (publish manifest) walkthrough
+│   │       ├── status.ts                # Status check CLI binding (read-only)
 │   │       └── sync.ts                  # Sync runner CLI binding
 │   ├── core/                            # Domain logic. No terminal I/O, no process.exit.
 │   │   ├── config/
@@ -83,6 +85,9 @@ maester/
 │   │   │   ├── json.ts                  # Top-level state property
 │   │   │   ├── plaintext.ts             # Line-1 'state: <value>' for .txt
 │   │   │   └── applier.ts               # Walk staged dest -> resolve -> write back
+│   │   ├── status/                      # Read-only freshness check
+│   │   │   ├── runner.ts                # Per-source orchestrator; returns StatusResult
+│   │   │   └── probe.ts                 # ls-remote SHA + ephemeral sparse maester.yaml
 │   │   └── errors.ts                    # Tagged error classes (ConfigError, AuthError, ...)
 │   ├── schemas/
 │   │   ├── citadel.ts                   # zod schema for citadel.yaml + inferred types
@@ -154,6 +159,7 @@ maester/
 | Glyph catalog | `src/ui/theme/glyphs.ts` | Mirrors `gspec/style.md` §8 with ASCII fallbacks. |
 | Top-level CLI dispatch | `src/cli/main.ts` | Commander program; routes subcommands and the no-arg interactive menu. |
 | Sync orchestrator | `src/core/sync/runner.ts` | One function per maester; aggregates results; never exits the process. |
+| Status orchestrator | `src/core/status/runner.ts` | Read-only sibling of the sync runner; returns `StatusResult { outcomes[], counts }`; never writes to a destination, the cache, or a provenance marker. |
 
 ---
 
@@ -317,9 +323,11 @@ Introduced by: [Maester Configuration](features/maester-configuration.md). The `
 // src/index.ts
 export { loadCitadelConfig, loadMaesterConfig } from "./core/config/loader.js";
 export { runSync } from "./core/sync/runner.js";
+export { runStatus } from "./core/status/runner.js";
 export type { CitadelConfig, Source, AuthRef } from "./schemas/citadel.js";
 export type { MaesterConfig, PublishedDocument } from "./schemas/maester.js";
 export type { SyncResult, SyncOutcome } from "./core/sync/runner.js";
+export type { StatusResult, StatusOutcome, StatusVerdict, BehindReason } from "./core/status/runner.js";
 ```
 
 Internal modules are not re-exported. Consumers of the library use only what is listed above; everything else is private.
@@ -346,6 +354,8 @@ Internal modules are not re-exported. Consumers of the library use only what is 
 | `maester publish` | Run maester (publish manifest) walkthrough directly. |
 | `maester sync [names...]` | Run sync. Optional positional names scope the run to a subset. |
 | `maester sync --json` | Sync, emitting one JSON object per line; prompt + spinner layers disabled. |
+| `maester status [names...]` | Read-only freshness check. Optional positional names scope the run to a subset. Exit codes: `0` (all up-to-date), `1` (≥ 1 behind, 0 failed), `2` (≥ 1 failed, or config/invocation error). |
+| `maester status --json` | Status, emitting one JSON object per source on stdout (NDJSON). Same exit-code ladder. |
 | `maester --help` | Banner + figlet header + command list. |
 | `maester --version` | Banner + version string. |
 
@@ -396,6 +406,8 @@ Each domain operation is a pure function (or a closely-related set of functions)
 | Provenance | `src/core/sync/provenance.ts` | Read/write `.maester-source.json` inside each destination directory. Validates `maesterName` matches before overwriting. |
 | State applier | `src/core/state/applier.ts` | Walk a staged destination tree, resolve each file's state via the inline > rule > default precedence, and write it back through the format-specific writer. Returns a `{ canon, draft, untagged }` breakdown plus per-file warnings. See §6.8. |
 | State format dispatch | `src/core/state/format.ts` | Map a file extension to a `(parser, writer)` pair. Supported in v1: `.md`, `.html` / `.htm`, `.yaml` / `.yml`, `.json`, `.txt`. Unsupported extensions return `undefined` (the file is counted as untagged and no inline state is written). |
+| Status runner | `src/core/status/runner.ts` | For each in-scope source: read provenance, call probe, compare, return a `StatusOutcome`. Aggregates a `StatusResult { outcomes, counts }`. Reuses sync's per-source concurrency primitive (default 4, `--concurrency <n>` override). Never throws on per-source failure. Never writes to a destination, the cache, or a marker. See §6.9. |
+| Status probe | `src/core/status/probe.ts` | `probeCommitSha(entry, ctx)` calls `git ls-remote <url> <ref>` (via `src/core/git/client.ts`) to resolve the current commit SHA without cloning. `probeManifest(entry, ctx)` performs a `--filter=blob:none --depth=1` clone + sparse-checkout of `maester.yaml` into a temp dir under `.maester/.status-<rand>/`, parses it against `src/schemas/maester.ts`, and removes the temp dir in a `try/finally`. Both honor the resolved `AuthRef`. |
 | Gitignore | `src/core/repo/gitignore.ts` | Append missing entries to `.gitignore`; never reorder or rewrite. Returns the set of lines that were added. |
 
 ### 6.4 External Integrations
@@ -625,12 +637,127 @@ The human-readable renderer prints the breakdown on the source's summary line (`
 - It never modifies the maester's source files. Only files in the citadel's staged destination are touched.
 - It never tags a file whose extension is not in the v1 dispatch table (binary assets, PDFs, images). Those files are materialized untouched and reported as `untagged` in the breakdown. A future sidecar-metadata feature can close that gap; this architecture does not.
 - It never overrides an inline state declared by a file's author — even when a maester-config or citadel-config rule disagrees. The optional P2 `DisagreementWarning` exists to make that override visible without changing its outcome.
+- It never tags the root-level `maester.yaml` itself. The remote publish manifest is fetched alongside the published documents (so the citadel can see what the source declared) but it is a sync artifact, not a document; the applier skips it at the destination root. A `maester.yaml` nested under any subdirectory is treated as an ordinary YAML document and gets tagged normally.
+
+### 6.9 Status Run Flow
+
+`maester status [names...]` reports per-source verdicts in a fraction of the time and side-effects of a sync. The runner mirrors the sync runner's per-source parallelism (same default concurrency of 4, same `--concurrency <n>` override) but each source's pipeline is a probe instead of a fetch — no clone into the persistent cache, no staging directory, no destination write, no provenance rewrite.
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant CLI as src/cli/commands/status.ts
+    participant Runner as src/core/status/runner.ts
+    participant Loader as src/core/config/loader.ts
+    participant Prov as src/core/sync/provenance.ts
+    participant Auth as src/core/auth/resolver.ts
+    participant Probe as src/core/status/probe.ts
+    participant Git as src/core/git/client.ts
+    participant Remote as Git remote
+    participant FS as Filesystem
+
+    U->>CLI: maester status
+    CLI->>Loader: loadCitadelConfig(repoRoot)
+    Loader-->>CLI: CitadelConfig | throws ConfigError (exit 2)
+    CLI->>Runner: runStatus(config, { scope, concurrency })
+    loop For each source (parallel, bounded)
+        Runner->>Prov: readProvenanceMarker(destination)
+        alt marker absent or schema-invalid
+            Prov-->>Runner: undefined
+            Runner-->>Runner: verdict = "behind", reasons = ["never-synced"]
+        else marker present
+            Runner->>Auth: resolveAuth(source.auth, process.env)
+            alt env-var missing for token auth
+                Auth-->>Runner: throws AuthError
+                Runner-->>Runner: verdict = "failed", error = redacted message
+            else auth resolved
+                Auth-->>Runner: { type: "delegated" } | { type: "token", value }
+                alt source.ref matches /^[0-9a-f]{40}$/
+                    Runner-->>Runner: resolvedSha = source.ref (short-circuit, no remote call)
+                else
+                    Runner->>Probe: probeCommitSha(entry, { token })
+                    Probe->>Git: listRemoteRef(url, ref)
+                    Git->>Remote: ls-remote (HTTPS or SSH)
+                    Remote-->>Git: <sha> refs/...  (+ <sha>^{} for annotated tags)
+                    Git-->>Probe: dereferenced commit SHA
+                    Probe-->>Runner: resolvedSha
+                end
+                alt source.includes is set (includes-driven)
+                    Runner-->>Runner: manifest-changed check skipped
+                else manifest-driven
+                    Runner->>Probe: probeManifest(entry, { token })
+                    Probe->>FS: mkdtemp .maester/.status-<rand>/
+                    Probe->>Git: partial clone + sparse-checkout(maester.yaml)
+                    Git->>Remote: fetch tree metadata + 1 blob
+                    Remote-->>Git: maester.yaml bytes
+                    Git-->>Probe: parsed PublishedDocument[]
+                    Probe->>FS: rm -rf .maester/.status-<rand>/
+                    Probe-->>Runner: { filterSet }
+                end
+                Runner->>Runner: resolvedSha vs marker.commitSha
+                Runner->>Runner: sortedSet(filterSet) vs sortedSet(marker.filterSet)
+                Runner-->>Runner: verdict + reasons[]
+            end
+        end
+    end
+    Runner-->>CLI: StatusResult { outcomes, counts }
+    CLI->>U: human summary or NDJSON stream
+    Note over CLI: exit 0 (all up-to-date) | 1 (≥1 behind, 0 failed) | 2 (≥1 failed or config error)
+```
+
+#### Verdict shape
+
+```ts
+type StatusVerdict = "up-to-date" | "behind" | "failed";
+type BehindReason = "never-synced" | "remote-ref-advanced" | "manifest-changed";
+
+type StatusOutcome =
+  | { name: string; verdict: "up-to-date"; commitSha: string }
+  | {
+      name: string;
+      verdict: "behind";
+      reasons: BehindReason[];
+      commitSha?: string;     // recorded in provenance; absent when never-synced
+      resolvedSha?: string;   // current remote SHA; absent when never-synced
+    }
+  | { name: string; verdict: "failed"; error: string };
+
+type StatusResult = {
+  outcomes: StatusOutcome[];
+  counts: { upToDate: number; behind: number; failed: number };
+};
+```
+
+The result type is exported from `src/core/status/runner.ts` and re-exported from `src/index.ts` (see §4) so library consumers can call `runStatus` programmatically and branch on the same shape the CLI emits in `--json` mode.
+
+#### Comparison semantics
+
+- **Never-synced** is checked first, before any network call. A source whose destination directory does not exist, or whose `.maester-source.json` is absent or schema-invalid, is reported as `behind` with reasons `["never-synced"]`. No `ls-remote` and no manifest probe are attempted for that source — short-circuiting saves a network round-trip and avoids exercising auth for a source the user clearly has not materialized yet.
+- **Remote-ref-advanced** compares `resolvedSha` (from `ls-remote`, or from `source.ref` itself when the ref is a pinned 40-char SHA — see Gap 26) to `marker.commitSha`. Inequality in either direction is the signal; the architecture does not ask "is the upstream strictly newer in graph order" — any difference counts as drift.
+- **Manifest-changed** applies only to manifest-driven sources (`source.includes` unset). The probe fetches the remote `maester.yaml`, extracts `documents[].path`, normalizes it to a **sorted, deduplicated set**, and compares to `marker.filterSet` normalized the same way. A cosmetic re-order of the remote `documents:` block does not trip the signal — only an additive, subtractive, or substantive change does. Sync's existing element-wise `filterSetMatches()` in `src/core/sync/provenance.ts` is unchanged; the two semantics are intentional (see Gap 24).
+- A source can be `behind` with **multiple reasons** in a single run. `never-synced` is always alone; the other two can co-occur. Reasons are emitted in fixed order — `remote-ref-advanced` before `manifest-changed` — so output is deterministic.
+
+#### Exit-code semantics
+
+| Exit | Condition |
+|---|---|
+| `0` | Every checked source is `up-to-date`. |
+| `1` | At least one source is `behind` and zero are `failed`. |
+| `2` | At least one source is `failed`, **or** the run could not start (missing config, malformed YAML, invocation outside a citadel, scope name unknown). |
+
+Failure takes precedence over behind: if both occur in the same run, exit code is `2` so the user notices the unreachable source instead of being lulled by a "just out of date" signal. Status's ladder is one rung deeper than sync's (sync remains `0` / `1`); both are documented in `--help`.
+
+#### Side-effect contract
+
+Status writes exactly **nothing** to the citadel destination directories, the persistent cache at `.maester/cache/`, the provenance markers, or the user's `.gitignore`. The only filesystem touch is the ephemeral temp directory `.maester/.status-<rand>/` used by `probeManifest`, which is removed in a `try/finally` regardless of success or failure. The temp dir sits under `.maester/`, which is already covered by the line init appends to `.gitignore` (see [Gap 3](#gap-3--local-clone-cache-location)) — no new `.gitignore` change is needed.
+
+The destination-clobber guard ([Gap 6](#gap-6--destination-clobber-guard-before-any-sync-has-run)) does not apply to status because status never writes to a destination. The `--json` redaction rules from §7 (no secrets, no embedded tokens in URLs or error messages) apply identically to status output.
 
 ---
 
 ## 7. Authentication & Authorization Architecture
 
-The application has no in-process authorization layer. It operates with the invoking user's filesystem permissions and the credentials their environment grants to outbound git operations. The *only* authentication surface is the auth attached to each `Source` — every source uses the same `AuthRef` discriminated union, the same env-var resolution path, and the same redaction rules, regardless of whether the source is manifest-driven or includes-driven.
+The application has no in-process authorization layer. It operates with the invoking user's filesystem permissions and the credentials their environment grants to outbound git operations. The *only* authentication surface is the auth attached to each `Source` — every source uses the same `AuthRef` discriminated union, the same env-var resolution path, and the same redaction rules, regardless of whether the source is manifest-driven or includes-driven, and regardless of whether the caller is `maester sync` (which materializes content) or `maester status` (which does not). Both commands route through `src/core/auth/resolver.ts`; the only difference is which git invocations the resolved token then guards (`clone` + `fetch` for sync, `ls-remote` + a one-blob sparse-checkout for status — see §6.9).
 
 ### Auth modes
 
@@ -1121,6 +1248,50 @@ The init walkthrough runs the same validator before writing the file so collisio
 **Why it matters.** Determinism. Without a fixed rule the resolved state could drift with rearrangements of the filter list.
 
 **Resolution.** **First-match wins**, in source-file order (the order the entries appear in `maester.yaml`'s `documents:` or `citadel.yaml`'s `includes:`). The applier iterates the filter set in array order and stops at the first entry whose pattern matches the file under test; that entry's `state` (if set) is the rule-level state. If the matching entry has no `state`, the resolution proceeds to the default (`draft`) — it does **not** fall back to the next matching entry. This keeps the rule "the entry the author put first applies" without surprise. Users who want a narrow rule to win over a broad one simply list the narrow rule first.
+
+#### Gap 22 — Status's remote query strategy
+
+**What's missing.** [Citadel Status P0](features/citadel-status.md) requires checking whether each source is up-to-date, behind, or failed without materializing files into a destination, and explicitly assumes status does not mutate the local cache. The PRD names the signals (`never-synced`, `remote-ref-advanced`, `manifest-changed`) but not the git invocations that produce them.
+
+**Why it matters.** Determines what status has to share with sync's `fetchSource()`, where the transient state goes, and whether a status run can leave disk state behind that affects the next sync.
+
+**Resolution.** (User-confirmed.) Status uses `git ls-remote <url> <ref>` for commit-SHA resolution — no clone, no working tree, no cache mutation. For manifest-driven sources, `probeManifest` runs the same `--filter=blob:none --depth=1` partial clone + sparse-checkout that sync's Stage 1 uses, but against a **fresh temp directory** at `.maester/.status-<rand>/`, fetching only `maester.yaml`. The temp directory is removed in a `try/finally` regardless of success or failure. Sync's persistent cache at `.maester/cache/<name>/` is never read or written by status. Authentication for both probe paths threads through `src/core/auth/resolver.ts` exactly as sync does: an `AuthRef` of `type: "token"` is resolved against `process.env` at run time, injected into the HTTPS URL for the git operation, and redacted before any error message reaches stdout/stderr.
+
+#### Gap 23 — Status's command surface and menu placement
+
+**What's missing.** The top-level interactive menu (§6.1) has a placeholder labeled "Show status (summarize configured roles)" that predates [Citadel Status](features/citadel-status.md). The new feature introduces a `maester status` command whose name overlaps but whose intent is different — source freshness, not role listing.
+
+**Why it matters.** Overloading "status" in two surfaces is a UX hazard. The architecture must commit to which menu entries exist and which commands they map to.
+
+**Resolution.** (User-confirmed.) `maester status` is a CLI-only command — no menu entry runs it. The primary callers (CI jobs, AI agents, developers running pre-flight checks) all type the verb explicitly, and the structured `--json` output is built for non-interactive consumption. The existing "Show status (summarize configured roles)" menu entry stays as-is and remains a role-summary path; the two surfaces are kept conceptually distinct. If a future feature wants menu-driven freshness checks, that is a separate decision and PRD.
+
+#### Gap 24 — Manifest-changed comparison semantics
+
+**What's missing.** [Citadel Status](features/citadel-status.md) explicitly flags cosmetic edits to a remote `maester.yaml` (re-ordering `documents:`, whitespace, comments) as a false-positive risk for the `manifest-changed` signal. Sync's existing `filterSetMatches()` in `src/core/sync/provenance.ts` is element-wise and would treat a re-order as a real change.
+
+**Why it matters.** A status verdict that flips between `up-to-date` and `behind` because a maintainer alphabetized the remote `documents:` block is a false positive — and agents will be especially noisy about it. The comparison must agree with the *resolved publish surface*, not the textual order.
+
+**Resolution.** (User-confirmed.) Status performs **set-equality** on the filter sets: each side is sorted and deduplicated before comparison. Sync's existing element-wise `filterSetMatches()` is unchanged — its job is cache-invalidation completeness, where re-running Stage 2 on a re-ordered list is conservative but harmless. Two semantics coexist in the codebase, each correct for its caller. The set-equality helper lives in `src/core/status/runner.ts` and is **not** re-exported from `provenance.ts`, so neither caller is at risk of accidentally adopting the other's semantics. A test in `test/unit/core/status/runner.test.ts` asserts that a re-ordered remote manifest is reported as `up-to-date` even when sync's primitive would consider it changed.
+
+#### Gap 25 — Status runner placement and code reuse with sync
+
+**What's missing.** Status reuses the citadel config loader, the auth resolver, the git client, and the provenance reader. It does **not** reuse `fetchSource()`, because `fetchSource()`'s contract is to materialize a working tree at `.maester/cache/<name>/` — the side-effect status must avoid. The architecture has to commit to where the status pipeline lives so it does not entangle with sync.
+
+**Why it matters.** Embedding status into `sync/runner.ts` would entangle two pipelines with different side-effect contracts. Reusing `fetchSource()` would force status either to accept the cache mutation or refactor sync, neither of which is justified by the feature's scope.
+
+**Resolution.** Status lives in a sibling cluster `src/core/status/` (`runner.ts` + `probe.ts`). The runner imports `loadCitadelConfig`, `resolveAuth`, `readProvenanceMarker`, and a new minimal helper on `src/core/git/client.ts` (`listRemoteRef(url, ref, token?)`, wrapping `simple-git`'s `listRemote`). The manifest probe issues the same partial-clone + sparse-checkout primitives sync's fetcher uses, but against a fresh temp directory and with `maester.yaml` as the only sparse target — no Stage 2, no destination copy, no provenance write. Sync's code is **not** modified. If a future refactor wants to hoist common primitives (e.g. manifest-discovery) into a shared module under `src/core/sources/`, that work is out of scope for this feature.
+
+#### Gap 26 — Pinned-SHA short-circuit and tag dereferencing
+
+**What's missing.** When `source.ref` is a 40-character commit SHA, `git ls-remote` is not the right primitive — refs match by name, not by SHA. The architecture must say what status does in this case and, separately, how it handles annotated tags whose `ls-remote` output contains both the tag object SHA and the dereferenced commit SHA (`<sha> refs/tags/v1.2.3` and `<sha> refs/tags/v1.2.3^{}`).
+
+**Why it matters.** Without a defined behavior, status would either always fail pinned sources, always report them as up-to-date, or quietly compare the wrong SHA for annotated tags.
+
+**Resolution.**
+
+1. **Pinned-SHA short-circuit.** When `source.ref` matches `^[0-9a-f]{40}$`, the probe does not call `ls-remote`. The "resolved SHA" is `source.ref` itself. The remote-ref-advanced check then degenerates to `provenance.commitSha === source.ref`: a match is `up-to-date`; a mismatch is correctly reported as `behind` with reason `remote-ref-advanced` (the citadel was synced at a different SHA than what the config now pins). The manifest-changed check still runs for manifest-driven pinned sources, because the pinned tree's manifest may still differ from what was recorded; the probe fetches `maester.yaml` at `source.ref` via the same partial-clone + sparse-checkout primitive.
+
+2. **Annotated tag dereferencing.** `listRemoteRef(url, ref)` requests both `refs/tags/<ref>` and `refs/tags/<ref>^{}` and, when the peeled form is present, returns the **dereferenced commit SHA**. This matches what sync's existing `checkoutRef` resolves to (which calls `git rev-parse HEAD` after checking out the ref), so status and sync agree on the SHA for the same tag.
 
 ### Assumptions
 

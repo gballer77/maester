@@ -3,10 +3,11 @@ import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseDocument } from "yaml";
-import type { Source } from "../../schemas/citadel.js";
+import { type Source, normalizeIncludeEntry } from "../../schemas/citadel.js";
 import { MaesterConfigSchema } from "../../schemas/maester.js";
 import { MaesterError } from "../errors.js";
 import { checkoutRef, fetchHead, setSparsePatterns, shallowSparseClone } from "../git/client.js";
+import type { RuleEntry } from "../state/schema.js";
 
 const MAESTER_MANIFEST_FILENAME = "maester.yaml";
 
@@ -21,6 +22,7 @@ export type FetchedTree = {
   cacheDir: string;
   commitSha: string;
   filterSet: readonly string[];
+  rules: readonly RuleEntry[];
   warnings: FetchWarning[];
 };
 
@@ -31,12 +33,13 @@ export type FetchContext = {
 };
 
 type ManifestDiscovery =
-  | { mode: "manifest"; patterns: string[] }
+  | { mode: "manifest"; patterns: string[]; rules: RuleEntry[] }
   | { mode: "no-manifest"; reason: "absent" | "invalid" };
 
 export async function fetchSource(entry: Source, ctx: FetchContext): Promise<FetchedTree> {
   if (entry.includes && entry.includes.length > 0) {
-    return fetchWithExplicitIncludes(entry, ctx, entry.includes);
+    const normalized = entry.includes.map(normalizeIncludeEntry);
+    return fetchWithExplicitIncludes(entry, ctx, normalized);
   }
   return fetchWithRemoteManifest(entry, ctx);
 }
@@ -70,6 +73,7 @@ async function fetchWithRemoteManifest(entry: Source, ctx: FetchContext): Promis
     cacheDir: ctx.cacheDir,
     commitSha,
     filterSet: discovery.patterns,
+    rules: discovery.rules,
     warnings: [],
   };
 }
@@ -77,7 +81,7 @@ async function fetchWithRemoteManifest(entry: Source, ctx: FetchContext): Promis
 async function fetchWithExplicitIncludes(
   entry: Source,
   ctx: FetchContext,
-  includes: readonly string[],
+  normalized: readonly { path: string; state?: import("../state/schema.js").State }[],
 ): Promise<FetchedTree> {
   if (!ctx.cacheExists) {
     await shallowSparseClone({
@@ -92,20 +96,28 @@ async function fetchWithExplicitIncludes(
 
   // Explicit includes bypass remote manifest discovery — the citadel owns the
   // filter set directly. Validated as non-empty by the schema.
-  await setSparsePatterns(ctx.cacheDir, includes);
+  const patterns = normalized.map((entry) => entry.path);
+  await setSparsePatterns(ctx.cacheDir, patterns);
   const commitSha = await checkoutRef(ctx.cacheDir, entry.ref);
 
   const matchedFileCount = await countMaterializedFiles(ctx.cacheDir);
   const warnings: FetchWarning[] = [];
   if (matchedFileCount === 0) {
-    warnings.push({ type: "no-matches", name: entry.name, includes });
+    warnings.push({ type: "no-matches", name: entry.name, includes: patterns });
   }
+
+  const rules: RuleEntry[] = normalized.map((entry) =>
+    entry.state === undefined
+      ? { pattern: entry.path }
+      : { pattern: entry.path, state: entry.state },
+  );
 
   return {
     name: entry.name,
     cacheDir: ctx.cacheDir,
     commitSha,
-    filterSet: includes,
+    filterSet: patterns,
+    rules,
     warnings,
   };
 }
@@ -132,10 +144,13 @@ export async function discoverManifestFromCache(cacheDir: string): Promise<Manif
     if (doc.errors.length > 0) return { mode: "no-manifest", reason: "invalid" };
     const parsed = MaesterConfigSchema.safeParse(doc.toJS({ maxAliasCount: -1 }));
     if (!parsed.success) return { mode: "no-manifest", reason: "invalid" };
+    const rules: RuleEntry[] = parsed.data.documents.map((d) =>
+      d.state === undefined ? { pattern: d.path } : { pattern: d.path, state: d.state },
+    );
     const patterns = parsed.data.documents.map((d) => d.path);
     if (patterns.length === 0) return { mode: "no-manifest", reason: "invalid" };
     if (!patterns.includes(MAESTER_MANIFEST_FILENAME)) patterns.unshift(MAESTER_MANIFEST_FILENAME);
-    return { mode: "manifest", patterns };
+    return { mode: "manifest", patterns, rules };
   } catch {
     return { mode: "no-manifest", reason: "invalid" };
   }
