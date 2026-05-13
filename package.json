@@ -1,5 +1,5 @@
 {
-  "name": "maester",
+  "name": "@baller.software/maester",
   "version": "0.1.0",
   "description": "A Node CLI for aggregating documentation from many sources into one central knowledge home for developers and AI agents.",
   "type": "module",

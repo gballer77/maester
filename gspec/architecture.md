@@ -31,6 +31,7 @@ This is a single-package, ESM-only Node.js library that ships a CLI binary. Ther
 | [Maester Configuration](features/maester-configuration.md) | `src/cli/commands/publish.ts` (interactive flow) + `src/core/config/` (write + validate maester.yaml). No script scaffolding. |
 | [Maester Sync](features/maester-sync.md) | `src/cli/commands/sync.ts` calling `src/core/sync/runner.ts`, which dispatches each entry to its `src/core/sources/` fetcher and orchestrates `src/core/git/`, `src/core/auth/`, and `src/core/sync/stage.ts`. |
 | [Citadel Ravens](features/citadel-ravens.md) | `ravens` section in `src/schemas/citadel.ts`; raven-registration step in `src/cli/commands/init.ts`; `src/core/sources/raven.ts` — a `SourceFetcher` implementation that uses each entry's citadel-side `includes` list as the sparse-checkout pattern set (skipping the maester-side manifest-discovery step). |
+| [Citadel Base Directory](features/citadel-base-directory.md) | Optional top-level `baseDir` field in `src/schemas/citadel.ts`; `src/core/config/paths.ts` exposes a single `defaultDestinationFor(repoRoot, sourceName, baseDir)` chokepoint reused by `src/core/sync/runner.ts`, `src/core/init/finalize.ts`, and the `superRefine` collision check. `baseDir` prompt added to `src/cli/commands/init.ts`. |
 
 ---
 
@@ -168,6 +169,7 @@ erDiagram
 
     CitadelConfig {
         string schemaVersion "literal: 2"
+        string baseDir "optional; default 'citadel'; repo-relative"
         MaesterSource[] maesters "may be empty if ravens non-empty"
         RavenSource[] ravens "may be empty if maesters non-empty"
     }
@@ -224,6 +226,7 @@ erDiagram
 | Field | Type | Constraints |
 |---|---|---|
 | `schemaVersion` | integer literal | Required. v2 sets `2`. The loader also accepts `schemaVersion: 1` documents and migrates them in memory (see §9 Gap 9). |
+| `baseDir` | string | Optional. Repo-relative path used as the parent folder for every entry whose `destination` is unset. Same shape rules as `MaesterSource.destination` (no leading `/`, no `..`, no whitespace-only). When omitted, behavior is identical to a literal value of `"citadel"`. Introduced by [Citadel Base Directory](features/citadel-base-directory.md). |
 | `maesters` | `MaesterSource[]` | Optional; defaults to `[]`. |
 | `ravens` | `RavenSource[]` | Optional; defaults to `[]`. |
 
@@ -231,7 +234,7 @@ Cross-array invariants (enforced by a Zod `.superRefine` on the parsed document,
 
 - The combined length of `maesters + ravens` must be ≥ 1. An empty citadel is rejected with an error pointing at the citadel root.
 - Every name (across both arrays combined) must be unique. A collision reports both colliding entries by name and kind.
-- Every resolved destination (`source.destination ?? \`citadel/${source.name}\``) must be unique across both arrays combined. A collision reports both colliding entries.
+- Every resolved destination (`source.destination ?? \`${config.baseDir ?? "citadel"}/${source.name}\``) must be unique across both arrays combined. A collision reports both colliding entries.
 
 `zod` schema: `.strict()` — unknown top-level fields are rejected, surfacing typos as errors. Introduced by [Citadel Initialization](features/citadel-initialization.md); extended by [Citadel Ravens](features/citadel-ravens.md); consumed by [Maester Sync](features/maester-sync.md).
 
@@ -243,7 +246,7 @@ Cross-array invariants (enforced by a Zod `.superRefine` on the parsed document,
 | `url` | string | Required. Must parse as `https://`, `ssh://`, or `git@host:path` form. No whitespace. |
 | `ref` | string | Optional. When absent, the remote's default branch is used at sync time. |
 | `auth` | `AuthRef` | Optional; defaults to `{ type: "none" }`. |
-| `destination` | string | Optional. Repo-relative path. Validation: no leading `/`, no `..` segments, no symlinks. Default: `citadel/<name>/`. |
+| `destination` | string | Optional. Repo-relative path. Validation: no leading `/`, no `..` segments, no symlinks. Default: `<baseDir>/<name>/` (where `baseDir` defaults to `citadel` — see `CitadelConfig.baseDir`). |
 
 Introduced by: [Citadel Initialization](features/citadel-initialization.md). Consumed by: [Maester Sync](features/maester-sync.md) via `src/core/sources/maester.ts`.
 
@@ -256,7 +259,7 @@ Introduced by: [Citadel Initialization](features/citadel-initialization.md). Con
 | `ref` | string | Optional. When absent, the remote's default branch is used at sync time. |
 | `includes` | string[] | **Required.** Length ≥ 1. Each entry is a repo-relative file path or `globby`-syntax glob; same shape validation as `PublishedDocument.path` (no leading `/`, no `..`, no whitespace-only entries). |
 | `auth` | `AuthRef` | Optional; defaults to `{ type: "none" }`. Mechanism identical to `MaesterSource`. |
-| `destination` | string | Optional. Same shape rules as `MaesterSource.destination`. Default: `citadel/<name>/`. |
+| `destination` | string | Optional. Same shape rules as `MaesterSource.destination`. Default: `<baseDir>/<name>/` (where `baseDir` defaults to `citadel` — see `CitadelConfig.baseDir`). |
 | `description` | string | Optional. Free text; surfaced in `--verbose` output alongside the entry name. |
 | `tags` | string[] | Optional. Each tag is a slug (`^[a-z0-9][a-z0-9-]*$`). Surfaced in `--verbose` output. |
 
@@ -273,7 +276,9 @@ The init walkthrough validates that the entered string looks like an env-var nam
 
 #### Destination (implicit, computed at sync time)
 
-Not a persisted entity. Computed per entry (maester or raven) as `entry.destination ?? path.join(repoRoot, "citadel", entry.name)`. Sync refuses to write into a destination that contains content lacking a `ProvenanceMarker` (see Risk Mitigation in [maester-sync.md](features/maester-sync.md)). The destination uniqueness invariant on `CitadelConfig` (above) prevents two entries — of either kind — from claiming the same path.
+Not a persisted entity. Computed per entry (maester or raven) as `entry.destination ?? path.join(repoRoot, config.baseDir ?? "citadel", entry.name)`. The single chokepoint is `defaultDestinationFor(repoRoot, sourceName, baseDir)` in `src/core/config/paths.ts`; every caller — sync runner, init finalizer, and the citadel `.superRefine` collision check — threads the parsed `config.baseDir` through this helper rather than hardcoding `"citadel"`. Sync refuses to write into a destination that contains content lacking a `ProvenanceMarker` (see Risk Mitigation in [maester-sync.md](features/maester-sync.md)). The destination uniqueness invariant on `CitadelConfig` (above) prevents two entries — of either kind — from claiming the same path.
+
+Changing `baseDir` after a previous sync is non-destructive: the next run resolves new destinations under the new base and writes there. Any directories left behind under the previous base are not deleted, moved, or warned about — they are the user's responsibility to clean up. The destination-clobber guard is unaffected, because each managed directory carries its own `ProvenanceMarker`; the orphaned ones simply sit dormant.
 
 #### ProvenanceMarker (`.maester-source.json` inside each destination)
 
@@ -313,7 +318,7 @@ Introduced by: [Maester Configuration](features/maester-configuration.md).
 
 - **No shared entities across roles.** A `CitadelConfig` and `MaesterConfig` can coexist in the same repo (both files at the root) but never reference each other inside the repo — the linkage happens *across* repos at sync time, when a citadel pulls a remote that itself has a `maester.yaml`.
 - **Maester and raven names share a single namespace.** `MaesterSource.name` and `RavenSource.name` are uniqueness-checked against each other so the slug can safely be used as a directory name (`citadel/<name>/`), a CLI argument (`maester sync foo bar`), and a result-table key regardless of kind. The same is true of resolved destinations — a maester and a raven cannot claim the same target directory.
-- **Schema versioning.** The citadel schema is at v2 (ravens added). The maester schema remains at v1. The loader (`src/core/config/loader.ts`) reads `schemaVersion` first and routes to the matching schema. v1 citadel documents (with a `sources:` field) are accepted and migrated in memory (see §9 Gap 9). Unknown versions are rejected with an error pointing at the upgrade path. Migrations live in `src/core/config/migrations/`.
+- **Schema versioning.** The citadel schema is at v2 (ravens added). The maester schema remains at v1. The loader (`src/core/config/loader.ts`) reads `schemaVersion` first and routes to the matching schema. v1 citadel documents (with a `sources:` field) are accepted and migrated in memory (see §9 Gap 9). Unknown versions are rejected with an error pointing at the upgrade path. Migrations live in `src/core/config/migrations/`. The optional top-level `baseDir` was added to v2 in-place rather than triggering a v3 bump — it is a backward-compatible additive field, and existing v2 documents that omit it continue to validate and behave identically to before.
 
 ---
 
@@ -649,7 +654,7 @@ The citadel-init walkthrough enforces the "name, not value" rule with both copy 
 | `<repo-root>/citadel.yaml` | `src/schemas/citadel.ts` | [Citadel Initialization](features/citadel-initialization.md) | [Maester Sync](features/maester-sync.md) |
 | `<repo-root>/maester.yaml` | `src/schemas/maester.ts` | [Maester Configuration](features/maester-configuration.md) | [Maester Sync](features/maester-sync.md), when this repo is consumed as a source |
 | `<repo-root>/.maester/cache/<name>/` | n/a (managed git clones) | Sync runner | Sync runner |
-| `<repo-root>/citadel/<name>/.maester-source.json` | `src/core/sync/provenance.ts` | Sync runner | Sync runner (destination-clobber guard) |
+| `<repo-root>/<resolved-destination>/.maester-source.json` | `src/core/sync/provenance.ts` | Sync runner | Sync runner (destination-clobber guard). `<resolved-destination>` is `entry.destination` if set, otherwise `<baseDir>/<entry.name>/` with `baseDir` defaulting to `citadel`. |
 | `<repo-root>/.gitignore` (append-only) | n/a | Citadel init + sync runner | git |
 
 ### Example `citadel.yaml`
@@ -658,7 +663,7 @@ The citadel-init walkthrough enforces the "name, not value" rule with both copy 
 # citadel.yaml
 #
 # This file declares the remote knowledge sources this repository pulls into
-# its local `citadel/` directory. Two kinds of sources are supported:
+# a local destination directory. Two kinds of sources are supported:
 #
 #   * maesters — repositories that publish their own `maester.yaml` declaring
 #     what they make available. The citadel consumes whatever the maester
@@ -668,12 +673,22 @@ The citadel-init walkthrough enforces the "name, not value" rule with both copy 
 #     paths/globs to materialize. Use ravens for public third-party repos or
 #     private repos you have read access to but do not own.
 #
+# By default, every source is surfaced at `<baseDir>/<source-name>/` from the
+# repository root. The optional top-level `baseDir` field below changes that
+# parent folder once for every source; when omitted, the default is `citadel`.
+# A per-source `destination` always wins over the configured base.
+#
 # Run `maester sync` (or `npm run maester:sync`) to refresh both kinds in
 # one pass. Generated by `npx maester init` and safe to commit. Secret
 # values are never stored here — only the names of environment variables
 # that hold them.
 
 schemaVersion: 2
+
+# Optional. Parent folder for every source that does not set its own
+# `destination` override. Omit (or set to `citadel`) to keep the default.
+# Repo-relative path; leading slashes and `..` segments are rejected.
+# baseDir: vendor
 
 maesters:
   # Public repository on its default branch.
@@ -706,9 +721,9 @@ maesters:
     ref: main
 
   # A maester with a custom destination override. By default, content is
-  # surfaced at `citadel/<name>/`; this one is redirected to `vendor/tokens/`
-  # instead. The override is repo-relative; leading slashes and `..` segments
-  # are rejected by the validator.
+  # surfaced at `<baseDir>/<name>/`; this one is redirected to `vendor/tokens/`
+  # instead, regardless of what `baseDir` is set to. The override is
+  # repo-relative; leading slashes and `..` segments are rejected.
   - name: design-tokens
     url: https://github.com/example-org/design-tokens.git
     ref: release/2026.05
@@ -957,7 +972,7 @@ The runner becomes a thin orchestrator: select fetcher by `entry.kind`, call `fe
 
 1. Builds the combined entries list (`[...maesters.map(m => ({ kind: "maester", ...m })), ...ravens.map(r => ({ kind: "raven", ...r }))]`).
 2. Asserts each `name` appears exactly once. A duplicate reports both colliding entries by name and kind, pointing at the offending YAML lines via Zod's `addIssue`.
-3. Asserts each resolved destination (`entry.destination ?? \`citadel/${entry.name}\``) appears exactly once. A duplicate reports both colliding entries.
+3. Asserts each resolved destination (`entry.destination ?? \`${config.baseDir ?? "citadel"}/${entry.name}\``) appears exactly once. A duplicate reports both colliding entries. The refinement reads `config.baseDir` from the parsed document so the collision check operates on the same resolved path that sync will write to.
 4. Asserts the combined length is ≥ 1. An empty citadel is rejected.
 
 The init walkthrough runs the same validator before writing the file so collisions are caught at config-time, not sync-time.
@@ -978,18 +993,32 @@ The init walkthrough runs the same validator before writing the file so collisio
 
 **Resolution.** `includes` entries use the **same shape and validation** as `PublishedDocument.path` (defined in `src/schemas/maester.ts`): repo-relative, no leading `/`, no `..` segments, no whitespace-only entries, `globby` glob syntax. The shape validator is extracted into a shared `repoRelativePathSchema` in `src/schemas/common.ts` and reused by both schemas. At sync time, the resolved `includes` are passed to `simple-git`'s `sparseCheckout` API as a discrete argv array (never string-interpolated into a shell command), so glob metacharacters in patterns cannot escape the flag.
 
-#### Gap 14 — Raven destinations default to `citadel/<name>/`
+#### Gap 14 — Raven destinations default to `<baseDir>/<name>/`
 
-**What's missing.** The PRD says ravens land in `citadel/<raven-name>/` by default. This is identical to the maester default — worth recording as a single chokepoint rather than letting the implementation accidentally diverge.
+**What's missing.** The PRD says ravens land in `<baseDir>/<raven-name>/` by default (where `baseDir` defaults to `citadel`). This is identical to the maester default — worth recording as a single chokepoint rather than letting the implementation accidentally diverge.
 
-**Resolution.** The destination-resolution helper in `src/core/config/paths.ts` accepts any entry shaped as `{ name: string; destination?: string }` and is reused by both kinds. The shared-namespace invariant (Gap 11) prevents two entries — even one maester and one raven with the same name — from claiming the same path: the schema rejects them at parse time. There is no per-kind logic.
+**Resolution.** The destination-resolution helper in `src/core/config/paths.ts` is `defaultDestinationFor(repoRoot, sourceName, baseDir)`. It accepts any entry shaped as `{ name: string; destination?: string }` and is reused by both kinds, with the parsed `config.baseDir` (or its `"citadel"` default) threaded through by every caller — sync runner, init finalizer, and the citadel `.superRefine` collision check. The shared-namespace invariant (Gap 11) prevents two entries — even one maester and one raven with the same name — from claiming the same path: the schema rejects them at parse time. There is no per-kind logic.
+
+#### Gap 15 — Configurable citadel base directory
+
+**What's missing.** [Citadel Base Directory](features/citadel-base-directory.md) introduces an optional top-level `baseDir` that changes the parent folder for every entry whose `destination` is unset. The PRD settles the user-facing behavior; this architecture has to commit to where the field lives in the schema, where the resolution happens, and how the change ships without breaking existing configs.
+
+**Why it matters.** Every place the architecture previously hardcoded `"citadel"` — the destination-resolution helper, the `.superRefine` collision check, the init walkthrough's preview text, the example YAML's header comment — now has to read from a single chokepoint instead. Multiple chokepoints would let the resolved path drift between collision-check time and sync time, allowing a config that validates but writes to the wrong place.
+
+**Resolution.** (User-confirmed.)
+
+1. **Schema shape.** `baseDir` is added to `CitadelConfigSchema` (v2) as an optional, repo-relative string with the same shape validation as `MaesterSource.destination` (no leading `/`, no `..`, no whitespace-only). No schema version bump — the field is purely additive, and existing v2 configs that omit it continue to validate and behave identically.
+2. **Single chokepoint.** `defaultDestinationFor(repoRoot, sourceName, baseDir)` in `src/core/config/paths.ts` is the only place that computes a default destination. It applies `baseDir ?? "citadel"` internally so callers can pass through whatever the parsed config has without their own `??` fallback. Every caller — `src/core/sync/runner.ts`, `src/core/init/finalize.ts`, and the citadel `.superRefine` — threads the parsed `config.baseDir` through this helper.
+3. **Init-time prompt.** The citadel-init walkthrough adds one prompt for the base directory, pre-filled with `citadel` and validated against the same shape rule as the schema. When the user accepts the default, init **omits** the field from the generated YAML — accepting the default produces a config indistinguishable from today's, minimizing the diff against pre-existing projects. When the user enters anything else, init writes the explicit `baseDir:` line.
+4. **Non-destructive change.** If the user later edits `baseDir` and re-syncs, the runner writes to the newly-resolved destinations. Directories under the previous base are left in place — no deletion, no move, no warning. The destination-clobber guard remains intact because each managed directory still owns its `ProvenanceMarker`; orphaned ones are inert.
+5. **Cache is unaffected.** The `.maester/cache/<source-name>/` layout is orthogonal to `baseDir`. The cache is keyed by source name only.
 
 ### Assumptions
 
 - **One repository, one role each.** A repo has at most one `citadel.yaml` and at most one `maester.yaml`. Both can coexist (as confirmed by [Maester Configuration P1](features/maester-configuration.md)); the schemas and tooling assume single-instance per role per repo.
 - **No prior tool state to migrate.** This is a greenfield project. The loader supports forward-migration scaffolding but ships with v1 only.
 - **Partial clone requires `git ≥ 2.27`.** The fetch strategy in §6.7 uses `--filter=blob:none` + sparse checkout. Older binaries fall back to a conventional `--depth=1` clone with a `--verbose` notice; final destination contents are identical.
-- **`citadel/` is a safe default top-level directory.** No PRD prohibits the default. Users with a conflicting `citadel/` directory at their repo root will hit the destination-clobber guard (Gap 6) and be directed to set per-source `destination` overrides.
+- **`citadel/` is a safe default top-level directory.** No PRD prohibits the default. Users with a conflicting `citadel/` directory at their repo root will hit the destination-clobber guard (Gap 6) and be directed to either set the top-level `baseDir` to a different folder (Gap 15) or set per-source `destination` overrides.
 - **`--json` output is one JSON object per line (NDJSON).** Implied by [stack.md §9](stack.md). Confirmed here so tests and downstream consumers can rely on it.
 
 ---
