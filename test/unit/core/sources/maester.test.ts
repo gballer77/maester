@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { discoverManifestFromCache } from "../../../../src/core/sync/filters.js";
+import { discoverManifestFromCache } from "../../../../src/core/sources/maester.js";
 import { type TempRepo, makeTmpRepo } from "../../../helpers/tmp-repo.js";
 
 let repo: TempRepo;

@@ -12,7 +12,6 @@ import {
 export type StageInput = {
   cacheDir: string;
   destination: string;
-  patterns: readonly string[] | "all";
   marker: ProvenanceMarker;
 };
 
@@ -22,7 +21,7 @@ export type StageOutcome = {
 };
 
 export async function stageDestination(input: StageInput): Promise<StageOutcome> {
-  await assertDestinationSafe(input.destination, input.marker.maesterName);
+  await assertDestinationSafe(input.destination, input.marker.sourceName);
   const tempDir = `${input.destination}.tmp-${Math.random().toString(36).slice(2, 10)}`;
   await mkdir(dirname(input.destination), { recursive: true });
   await mkdir(tempDir, { recursive: true });
@@ -61,19 +60,19 @@ async function promoteTempToDestination(tempDir: string, destination: string): P
 
 export async function assertDestinationSafe(
   destination: string,
-  expectedMaesterName: string,
+  expectedSourceName: string,
 ): Promise<void> {
   if (!existsSync(destination)) return;
   const entries = await readdir(destination);
   if (entries.length === 0) return;
   if (entries.length === 1 && entries[0] === PROVENANCE_FILENAME) {
     const marker = await readProvenanceMarker(destination);
-    if (!marker || marker.maesterName === expectedMaesterName) return;
+    if (!marker || marker.sourceName === expectedSourceName) return;
   }
   const marker = await readProvenanceMarker(destination);
-  if (marker && marker.maesterName === expectedMaesterName) return;
+  if (marker && marker.sourceName === expectedSourceName) return;
   throw new DestinationBlockedError(
     destination,
-    `Refusing to overwrite ${destination}: contains content that was not produced by maester '${expectedMaesterName}'. Remove the directory or choose a different destination.`,
+    `Refusing to overwrite ${destination}: contains content that was not produced by '${expectedSourceName}'. Remove the directory or choose a different destination.`,
   );
 }

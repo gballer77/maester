@@ -1,30 +1,29 @@
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { CitadelConfig, MaesterSource } from "../../schemas/citadel.js";
+import type { CitadelConfig, MaesterSource, RavenSource } from "../../schemas/citadel.js";
 import { resolveAuth } from "../auth/resolver.js";
 import { CACHE_SUBDIR, cachePathForSource, defaultDestinationFor } from "../config/paths.js";
 import { AuthError, MaesterError, RefNotFoundError } from "../errors.js";
-import {
-  checkoutRef,
-  clearWorktree,
-  fetchHead,
-  setSparsePatterns,
-  shallowSparseClone,
-} from "../git/client.js";
-import { discoverManifestFromCache } from "./filters.js";
-import { readProvenanceMarker } from "./provenance.js";
+import { clearWorktree } from "../git/client.js";
+import type { FetchWarning, FetchedTree, SourceFetcher } from "../sources/fetcher.js";
+import { createMaesterFetcher } from "../sources/maester.js";
+import { createRavenFetcher } from "../sources/raven.js";
+import { filterSetMatches, readProvenanceMarker } from "./provenance.js";
 import { stageDestination } from "./stage.js";
 
 export type SyncStatus = "added" | "updated" | "unchanged" | "failed";
+export type EntryKind = "maester" | "raven";
 
 export type SyncOutcome = {
+  kind: EntryKind;
   name: string;
   status: SyncStatus;
   destination: string;
   ref: string | undefined;
   commitSha?: string;
   filterMode?: "manifest" | "no-manifest";
+  warnings: FetchWarning[];
   error?: string;
 };
 
@@ -42,10 +41,13 @@ export type SyncOptions = {
 };
 
 export type ProgressEvent =
-  | { type: "start"; source: string }
-  | { type: "fetched"; source: string; commitSha: string }
-  | { type: "staged"; source: string; status: SyncStatus }
-  | { type: "failed"; source: string; error: string };
+  | { type: "start"; kind: EntryKind; name: string }
+  | { type: "fetched"; kind: EntryKind; name: string; commitSha: string }
+  | { type: "staged"; kind: EntryKind; name: string; status: SyncStatus }
+  | { type: "warning"; kind: EntryKind; name: string; warning: FetchWarning }
+  | { type: "failed"; kind: EntryKind; name: string; error: string };
+
+type Entry = { kind: "maester"; source: MaesterSource } | { kind: "raven"; source: RavenSource };
 
 const DEFAULT_CONCURRENCY = 4;
 
@@ -53,11 +55,13 @@ export async function runSync(config: CitadelConfig, options: SyncOptions): Prom
   const env = options.env ?? process.env;
   const scope = options.scope?.length ? new Set(options.scope) : undefined;
 
+  const allEntries: Entry[] = [
+    ...config.maesters.map((source): Entry => ({ kind: "maester", source })),
+    ...config.ravens.map((source): Entry => ({ kind: "raven", source })),
+  ];
+
   if (scope) {
-    const known = new Set([
-      ...config.maesters.map((s) => s.name),
-      ...config.ravens.map((s) => s.name),
-    ]);
+    const known = new Set(allEntries.map((e) => e.source.name));
     for (const name of scope) {
       if (!known.has(name)) {
         throw new MaesterError(
@@ -68,12 +72,12 @@ export async function runSync(config: CitadelConfig, options: SyncOptions): Prom
     }
   }
 
-  const sources = config.maesters.filter((s) => !scope || scope.has(s.name));
+  const entries = allEntries.filter((e) => !scope || scope.has(e.source.name));
   const limit = Math.min(
     Math.max(1, options.concurrency ?? DEFAULT_CONCURRENCY),
-    sources.length || 1,
+    entries.length || 1,
   );
-  const outcomes: SyncOutcome[] = new Array(sources.length);
+  const outcomes: SyncOutcome[] = new Array(entries.length);
 
   await mkdir(resolve(options.repoRoot, CACHE_SUBDIR), { recursive: true });
 
@@ -84,10 +88,10 @@ export async function runSync(config: CitadelConfig, options: SyncOptions): Prom
       (async () => {
         while (true) {
           const index = cursor++;
-          if (index >= sources.length) return;
-          const source = sources[index];
-          if (!source) return;
-          outcomes[index] = await processSource(source, options, env);
+          if (index >= entries.length) return;
+          const entry = entries[index];
+          if (!entry) return;
+          outcomes[index] = await processEntry(entry, options, env);
         }
       })(),
     );
@@ -98,110 +102,131 @@ export async function runSync(config: CitadelConfig, options: SyncOptions): Prom
   return { outcomes, failed };
 }
 
-async function processSource(
-  source: MaesterSource,
+async function processEntry(
+  entry: Entry,
   options: SyncOptions,
   env: NodeJS.ProcessEnv,
 ): Promise<SyncOutcome> {
-  const cacheDir = cachePathForSource(options.repoRoot, source.name);
-  const destination = source.destination
-    ? resolve(options.repoRoot, source.destination)
-    : defaultDestinationFor(options.repoRoot, source.name);
+  const cacheDir = cachePathForSource(options.repoRoot, entry.source.name);
+  const destination = entry.source.destination
+    ? resolve(options.repoRoot, entry.source.destination)
+    : defaultDestinationFor(options.repoRoot, entry.source.name);
 
-  options.onProgress?.({ type: "start", source: source.name });
+  options.onProgress?.({ type: "start", kind: entry.kind, name: entry.source.name });
 
   try {
-    const auth = resolveAuth(source.auth, env);
+    const auth = resolveAuth(entry.source.auth, env);
     const tokenForUrl = auth.type === "token" ? auth.value : undefined;
-
     const cacheExists = existsSync(cacheDir);
-    let commitSha: string;
-    if (!cacheExists) {
-      const cloneArgs = {
-        url: source.url,
-        destination: cacheDir,
-        ref: source.ref,
-        ...(tokenForUrl ? { useTokenInUrl: tokenForUrl } : {}),
-      };
-      await shallowSparseClone(cloneArgs);
-      await setSparsePatterns(cacheDir, ["maester.yaml"]);
-      commitSha = await checkoutRef(cacheDir, source.ref);
-    } else {
-      commitSha = await fetchHead(cacheDir, source.ref);
+
+    const fetcher: SourceFetcher =
+      entry.kind === "maester"
+        ? createMaesterFetcher(entry.source)
+        : createRavenFetcher(entry.source);
+
+    const tree: FetchedTree = await fetcher.fetch({
+      cacheDir,
+      cacheExists,
+      tokenForUrl,
+    });
+
+    options.onProgress?.({
+      type: "fetched",
+      kind: entry.kind,
+      name: entry.source.name,
+      commitSha: tree.commitSha,
+    });
+    for (const warning of tree.warnings) {
+      options.onProgress?.({
+        type: "warning",
+        kind: entry.kind,
+        name: entry.source.name,
+        warning,
+      });
     }
 
     const existingMarker = await readProvenanceMarker(destination);
     const wasUnchanged =
-      existingMarker?.commitSha === commitSha &&
-      existingMarker.maesterName === source.name &&
+      !!existingMarker &&
+      existingMarker.commitSha === tree.commitSha &&
+      existingMarker.sourceName === entry.source.name &&
+      filterSetMatches(existingMarker.filterSet, tree.filterSet) &&
       existsSync(destination);
 
-    const discovery = await discoverManifestFromCache(cacheDir);
-    let filterMode: "manifest" | "no-manifest";
-    if (discovery.mode === "manifest") {
-      filterMode = "manifest";
-      await setSparsePatterns(cacheDir, discovery.patterns);
-    } else {
-      filterMode = "no-manifest";
-      await setSparsePatterns(cacheDir, []);
-    }
-    if (cacheExists) {
-      await checkoutRef(cacheDir, source.ref);
-    } else {
-      await checkoutRef(cacheDir, source.ref);
-    }
-
-    options.onProgress?.({ type: "fetched", source: source.name, commitSha });
-
     if (wasUnchanged) {
-      options.onProgress?.({ type: "staged", source: source.name, status: "unchanged" });
+      options.onProgress?.({
+        type: "staged",
+        kind: entry.kind,
+        name: entry.source.name,
+        status: "unchanged",
+      });
       return {
-        name: source.name,
+        kind: entry.kind,
+        name: entry.source.name,
         status: "unchanged",
         destination,
-        ref: source.ref,
-        commitSha,
-        filterMode,
+        ref: entry.source.ref,
+        commitSha: tree.commitSha,
+        ...(entry.kind === "maester"
+          ? { filterMode: tree.filterSet === "all" ? "no-manifest" : "manifest" }
+          : {}),
+        warnings: tree.warnings,
       };
     }
 
     await stageDestination({
-      cacheDir,
+      cacheDir: tree.cacheDir,
       destination,
-      patterns:
-        filterMode === "manifest" && discovery.mode === "manifest" ? discovery.patterns : "all",
       marker: {
-        maesterName: source.name,
-        sourceUrl: source.url,
-        ref: source.ref,
-        commitSha,
+        kind: tree.kind,
+        sourceName: tree.name,
+        sourceUrl: entry.source.url,
+        ref: entry.source.ref,
+        commitSha: tree.commitSha,
+        filterSet: tree.filterSet,
         syncedAt: new Date().toISOString(),
       },
     });
 
     const status: SyncStatus = existingMarker ? "updated" : "added";
-    options.onProgress?.({ type: "staged", source: source.name, status });
+    options.onProgress?.({
+      type: "staged",
+      kind: entry.kind,
+      name: entry.source.name,
+      status,
+    });
     return {
-      name: source.name,
+      kind: entry.kind,
+      name: entry.source.name,
       status,
       destination,
-      ref: source.ref,
-      commitSha,
-      filterMode,
+      ref: entry.source.ref,
+      commitSha: tree.commitSha,
+      ...(entry.kind === "maester"
+        ? { filterMode: tree.filterSet === "all" ? "no-manifest" : "manifest" }
+        : {}),
+      warnings: tree.warnings,
     };
   } catch (err) {
     const message = errorMessage(err);
-    options.onProgress?.({ type: "failed", source: source.name, error: message });
+    options.onProgress?.({
+      type: "failed",
+      kind: entry.kind,
+      name: entry.source.name,
+      error: message,
+    });
     try {
       await clearWorktree(cacheDir);
     } catch {
       /* ignore */
     }
     return {
-      name: source.name,
+      kind: entry.kind,
+      name: entry.source.name,
       status: "failed",
       destination,
-      ref: source.ref,
+      ref: entry.source.ref,
+      warnings: [],
       error: message,
     };
   }

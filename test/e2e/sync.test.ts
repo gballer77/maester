@@ -47,7 +47,8 @@ describe("runSync against fixture bare repos", () => {
     expect(existsSync(resolve(dest, "README.md"))).toBe(true);
     expect(existsSync(resolve(dest, PROVENANCE_FILENAME))).toBe(true);
     const marker = JSON.parse(await readFile(resolve(dest, PROVENANCE_FILENAME), "utf8"));
-    expect(marker.maesterName).toBe("alpha");
+    expect(marker.kind).toBe("maester");
+    expect(marker.sourceName).toBe("alpha");
   }, 30_000);
 
   it("reports 'unchanged' on a no-op re-sync", async () => {
@@ -133,4 +134,128 @@ describe("runSync against fixture bare repos", () => {
     expect(result.outcomes).toHaveLength(1);
     expect(result.outcomes[0]?.name).toBe("beta");
   }, 30_000);
+
+  it("fetches a raven and surfaces only the declared includes", async () => {
+    const remote = await newRemote([
+      { path: "README.md", contents: "# raven\n" },
+      { path: "docs/intro.md", contents: "intro\n" },
+      { path: "private/secret.md", contents: "do not surface\n" },
+    ]);
+    const config: CitadelConfig = {
+      schemaVersion: 2,
+      maesters: [],
+      ravens: [
+        {
+          name: "vendor",
+          url: remote.bareRepoUrl,
+          ref: "main",
+          includes: ["docs/**/*.md", "README.md"],
+        },
+      ],
+    };
+    const result = await runSync(config, { repoRoot: repo.path });
+    expect(result.failed).toBe(0);
+    const outcome = result.outcomes[0];
+    expect(outcome?.kind).toBe("raven");
+    expect(outcome?.status).toBe("added");
+    expect(outcome?.warnings).toEqual([]);
+
+    const dest = repo.resolve("citadel/vendor");
+    expect(existsSync(resolve(dest, "README.md"))).toBe(true);
+    expect(existsSync(resolve(dest, "docs/intro.md"))).toBe(true);
+    expect(existsSync(resolve(dest, "private/secret.md"))).toBe(false);
+
+    const marker = JSON.parse(await readFile(resolve(dest, PROVENANCE_FILENAME), "utf8"));
+    expect(marker.kind).toBe("raven");
+    expect(marker.sourceName).toBe("vendor");
+    expect(marker.filterSet).toEqual(["docs/**/*.md", "README.md"]);
+  }, 30_000);
+
+  it("emits a no-matches warning when a raven's includes resolve to zero files", async () => {
+    const remote = await newRemote([{ path: "README.md", contents: "# only readme\n" }]);
+    const config: CitadelConfig = {
+      schemaVersion: 2,
+      maesters: [],
+      ravens: [
+        {
+          name: "drifted",
+          url: remote.bareRepoUrl,
+          ref: "main",
+          includes: ["does/not/exist/*.md"],
+        },
+      ],
+    };
+    const result = await runSync(config, { repoRoot: repo.path });
+    expect(result.failed).toBe(0);
+    const outcome = result.outcomes[0];
+    expect(outcome?.kind).toBe("raven");
+    expect(outcome?.status).toBe("added");
+    expect(outcome?.warnings).toHaveLength(1);
+    expect(outcome?.warnings[0]).toMatchObject({
+      kind: "raven",
+      type: "no-matches",
+      name: "drifted",
+    });
+  }, 30_000);
+
+  it("syncs a mixed citadel of maesters and ravens with one command", async () => {
+    const maesterRemote = await newRemote([
+      { path: "maester.yaml", contents: "schemaVersion: 1\ndocuments:\n  - path: README.md\n" },
+      { path: "README.md", contents: "# maester readme\n" },
+      { path: "private/secret.md", contents: "hidden by manifest\n" },
+    ]);
+    const ravenRemote = await newRemote([
+      { path: "README.md", contents: "# raven readme\n" },
+      { path: "docs/a.md", contents: "doc\n" },
+    ]);
+    const config: CitadelConfig = {
+      schemaVersion: 2,
+      maesters: [{ name: "internal", url: maesterRemote.bareRepoUrl, ref: "main" }],
+      ravens: [
+        {
+          name: "vendor",
+          url: ravenRemote.bareRepoUrl,
+          ref: "main",
+          includes: ["docs/**/*.md"],
+        },
+      ],
+    };
+    const result = await runSync(config, { repoRoot: repo.path });
+    expect(result.failed).toBe(0);
+    const byName = new Map(result.outcomes.map((o) => [o.name, o]));
+    expect(byName.get("internal")?.kind).toBe("maester");
+    expect(byName.get("internal")?.status).toBe("added");
+    expect(byName.get("vendor")?.kind).toBe("raven");
+    expect(byName.get("vendor")?.status).toBe("added");
+
+    const maesterDest = repo.resolve("citadel/internal");
+    expect(existsSync(resolve(maesterDest, "README.md"))).toBe(true);
+    expect(existsSync(resolve(maesterDest, "private/secret.md"))).toBe(false);
+
+    const ravenDest = repo.resolve("citadel/vendor");
+    expect(existsSync(resolve(ravenDest, "docs/a.md"))).toBe(true);
+    expect(existsSync(resolve(ravenDest, "README.md"))).toBe(false);
+  }, 60_000);
+
+  it("re-syncs a raven as unchanged when the remote and includes are stable", async () => {
+    const remote = await newRemote([
+      { path: "README.md", contents: "# stable\n" },
+      { path: "docs/a.md", contents: "a\n" },
+    ]);
+    const config: CitadelConfig = {
+      schemaVersion: 2,
+      maesters: [],
+      ravens: [
+        {
+          name: "stable",
+          url: remote.bareRepoUrl,
+          ref: "main",
+          includes: ["README.md"],
+        },
+      ],
+    };
+    await runSync(config, { repoRoot: repo.path });
+    const second = await runSync(config, { repoRoot: repo.path });
+    expect(second.outcomes[0]?.status).toBe("unchanged");
+  }, 60_000);
 });

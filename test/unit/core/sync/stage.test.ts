@@ -32,12 +32,13 @@ describe("stageDestination", () => {
     const result = await stageDestination({
       cacheDir,
       destination,
-      patterns: "all",
       marker: {
-        maesterName: "alpha",
+        kind: "maester",
+        sourceName: "alpha",
         sourceUrl: "https://example.com/a.git",
         ref: "main",
         commitSha: "0".repeat(40),
+        filterSet: "all",
         syncedAt: new Date().toISOString(),
       },
     });
@@ -46,7 +47,30 @@ describe("stageDestination", () => {
     expect(entries).toContain("README.md");
     expect(entries).toContain(PROVENANCE_FILENAME);
     const marker = JSON.parse(await readFile(resolve(destination, PROVENANCE_FILENAME), "utf8"));
-    expect(marker.maesterName).toBe("alpha");
+    expect(marker.kind).toBe("maester");
+    expect(marker.sourceName).toBe("alpha");
+    expect(marker.filterSet).toBe("all");
+  });
+
+  it("records a raven marker with an includes filter set", async () => {
+    const { cacheDir, destination } = await setupCache();
+    await stageDestination({
+      cacheDir,
+      destination,
+      marker: {
+        kind: "raven",
+        sourceName: "vendor",
+        sourceUrl: "https://example.com/v.git",
+        ref: "main",
+        commitSha: "1".repeat(40),
+        filterSet: ["docs/**", "README.md"],
+        syncedAt: new Date().toISOString(),
+      },
+    });
+    const marker = JSON.parse(await readFile(resolve(destination, PROVENANCE_FILENAME), "utf8"));
+    expect(marker.kind).toBe("raven");
+    expect(marker.sourceName).toBe("vendor");
+    expect(marker.filterSet).toEqual(["docs/**", "README.md"]);
   });
 
   it("replaces a managed destination atomically without leaving the .tmp- artifact", async () => {
@@ -54,12 +78,13 @@ describe("stageDestination", () => {
     await stageDestination({
       cacheDir,
       destination,
-      patterns: "all",
       marker: {
-        maesterName: "alpha",
+        kind: "maester",
+        sourceName: "alpha",
         sourceUrl: "https://example.com/a.git",
         ref: "main",
         commitSha: "a".repeat(40),
+        filterSet: "all",
         syncedAt: new Date().toISOString(),
       },
     });
@@ -68,12 +93,13 @@ describe("stageDestination", () => {
     await stageDestination({
       cacheDir,
       destination,
-      patterns: "all",
       marker: {
-        maesterName: "alpha",
+        kind: "maester",
+        sourceName: "alpha",
         sourceUrl: "https://example.com/a.git",
         ref: "main",
         commitSha: "b".repeat(40),
+        filterSet: "all",
         syncedAt: new Date().toISOString(),
       },
     });
@@ -89,15 +115,17 @@ describe("assertDestinationSafe", () => {
     await expect(assertDestinationSafe(dir, "alpha")).resolves.toBeUndefined();
   });
 
-  it("permits a destination managed by the same maester", async () => {
+  it("permits a destination managed by the same source", async () => {
     const dir = resolve(repo.path, "citadel/alpha");
     await mkdir(dir, { recursive: true });
     await writeFile(resolve(dir, "x.md"), "y", "utf8");
     await writeProvenanceMarker(dir, {
-      maesterName: "alpha",
+      kind: "maester",
+      sourceName: "alpha",
       sourceUrl: "https://example.com/a.git",
       ref: undefined,
       commitSha: "0".repeat(40),
+      filterSet: "all",
       syncedAt: new Date().toISOString(),
     });
     await expect(assertDestinationSafe(dir, "alpha")).resolves.toBeUndefined();
