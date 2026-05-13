@@ -91,7 +91,8 @@ export function createPrompts(theming: Theming): Prompts {
         ...(validateAdapter ? { validate: validateAdapter } : {}),
       };
       const result = await clack.text(baseOpts);
-      return ensure(result);
+      const checked = ensure(result);
+      return checked ?? "";
     },
     confirm: async (opts) => {
       const result = await clack.confirm({

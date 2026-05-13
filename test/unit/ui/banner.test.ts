@@ -15,13 +15,13 @@ describe("selectBannerVariant", () => {
     expect(selectBannerVariant(30, true)).toBe("suppressed");
   });
 
-  it("returns 'compact' between 40 and 79 cells", () => {
+  it("returns 'compact' between 40 and 99 cells", () => {
     expect(selectBannerVariant(40, true)).toBe("compact");
-    expect(selectBannerVariant(79, true)).toBe("compact");
+    expect(selectBannerVariant(99, true)).toBe("compact");
   });
 
-  it("returns 'full' at 80 cells or more", () => {
-    expect(selectBannerVariant(80, true)).toBe("full");
+  it("returns 'full' at 100 cells or more", () => {
+    expect(selectBannerVariant(100, true)).toBe("full");
     expect(selectBannerVariant(200, true)).toBe("full");
   });
 });
@@ -35,7 +35,7 @@ describe("renderBanner", () => {
   it("renders the full ASCII art with a subtitle when sized", () => {
     const theming = createTheming({ env: { NO_COLOR: "1" }, isTTY: true });
     const out = renderBanner(theming, "full", { subtitle: "v0.1.0" });
-    expect(out).toContain("__");
+    expect(out).toContain("████");
     expect(out).toContain("v0.1.0");
   });
 
