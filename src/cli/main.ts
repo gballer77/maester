@@ -7,6 +7,7 @@ import { createTheming } from "../ui/theme/index.js";
 import { readColumns } from "../ui/width.js";
 import { registerInit, runInit } from "./commands/init.js";
 import { registerPublish, runPublish } from "./commands/publish.js";
+import { registerStatus } from "./commands/status.js";
 import { registerSync } from "./commands/sync.js";
 import { type CliContext, type GlobalFlags, buildContext } from "./context.js";
 import { showTopLevelMenu } from "./menu.js";
@@ -74,6 +75,7 @@ function buildProgram(): Command {
 
   registerInit(program, () => buildContext(extractFlags(program.opts())));
   registerPublish(program, () => buildContext(extractFlags(program.opts())));
+  registerStatus(program, () => buildContext(extractFlags(program.opts())));
   registerSync(program, () => buildContext(extractFlags(program.opts())));
 
   program.action(async () => {
@@ -128,7 +130,7 @@ async function runNoArgs(ctx: CliContext): Promise<number> {
       case "publish":
         return runPublish(ctx);
       case "status":
-        return runStatus(ctx);
+        return runRoleSummary(ctx);
       case "exit":
         ctx.prompts.outro("Goodbye.");
         return 0;
@@ -142,7 +144,7 @@ async function runNoArgs(ctx: CliContext): Promise<number> {
   }
 }
 
-async function runStatus(ctx: CliContext): Promise<number> {
+async function runRoleSummary(ctx: CliContext): Promise<number> {
   const roles = detectRoles(ctx.repoRoot.path);
   ctx.prompts.log.message(`Citadel: ${roles.hasCitadel ? "configured" : "not configured"}`);
   ctx.prompts.log.message(`Maester: ${roles.hasMaester ? "configured" : "not configured"}`);

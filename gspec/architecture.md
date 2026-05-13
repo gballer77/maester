@@ -33,6 +33,7 @@ This is a single-package, ESM-only Node.js library that ships a CLI binary. Ther
 | [Citadel Base Directory](features/citadel-base-directory.md) | Optional top-level `baseDir` field in `src/schemas/citadel.ts`; `src/core/config/paths.ts` exposes a single `defaultDestinationFor(repoRoot, sourceName, baseDir)` chokepoint reused by `src/core/sync/runner.ts`, `src/core/init/finalize.ts`, and the `superRefine` collision check. `baseDir` prompt added to `src/cli/commands/init.ts`. |
 | [Document State Tagging](features/document-state-tagging.md) | New `src/core/state/` cluster (`schema.ts`, `format.ts`, `markdown.ts`, `html.ts`, `yaml.ts`, `json.ts`, `plaintext.ts`, `applier.ts`). Schema additions: `state` field on `PublishedDocument`, enriched object form (`{ path, state }`) on `Source.includes`. The applier slots into `src/core/sync/runner.ts` between staging and atomic promote — every materialized file in a supported format carries its resolved state inline at the citadel destination. |
 | [Citadel Status](features/citadel-status.md) | `src/cli/commands/status.ts` (CLI binding) calling `src/core/status/runner.ts`, which calls `src/core/status/probe.ts` per source. The probe uses `git ls-remote` for the commit SHA and a one-blob partial-clone + sparse-checkout into an ephemeral temp dir for the remote `maester.yaml`. Reuses `src/core/config/loader.ts`, `src/core/auth/resolver.ts`, and `src/core/sync/provenance.ts` (read-only). Never writes to a destination, never mutates `.maester/cache/`, never rewrites a provenance marker. |
+| [Grand Maester Skill](features/grand-maester-skill.md) | New `src/core/skill/` cluster (`runner.ts`, per-agent target writers under `targets/`, the `managed-region.ts` convention, `version.ts`, `runtime.ts`, and templates under `templates/`) plus `src/cli/commands/skill.ts` for the `maester skill <verb>` group. The same install/upgrade orchestration is invoked from `src/cli/commands/init.ts` at the end of the citadel walkthrough when the user opts in. The PreToolUse hook on Claude Code is path-scoped to citadel reads and delegates to `maester skill runtime preread`, which reuses `src/core/status/runner.ts`. See §6.10. |
 
 ---
 
@@ -56,6 +57,7 @@ maester/
 │   │   └── commands/
 │   │       ├── init.ts                  # Citadel initialization walkthrough
 │   │       ├── publish.ts               # Maester (publish manifest) walkthrough
+│   │       ├── skill.ts                 # `maester skill <verb>` group (install/upgrade/add-target/status/runtime)
 │   │       ├── status.ts                # Status check CLI binding (read-only)
 │   │       └── sync.ts                  # Sync runner CLI binding
 │   ├── core/                            # Domain logic. No terminal I/O, no process.exit.
@@ -88,6 +90,26 @@ maester/
 │   │   ├── status/                      # Read-only freshness check
 │   │   │   ├── runner.ts                # Per-source orchestrator; returns StatusResult
 │   │   │   └── probe.ts                 # ls-remote SHA + ephemeral sparse maester.yaml
+│   │   ├── skill/                       # Grand Maester agent skill installer + runtime helper
+│   │   │   ├── runner.ts                # install / upgrade / add-target orchestration
+│   │   │   ├── version.ts               # SKILL_VERSION constant + read-installed-version helper
+│   │   │   ├── managed-region.ts        # begin/end marker conventions per artifact format
+│   │   │   ├── runtime.ts               # `maester skill runtime preread / status-summary` helpers
+│   │   │   ├── targets/
+│   │   │   │   ├── index.ts             # Target registry; dedup by output artifact path
+│   │   │   │   ├── claude-code.ts       # .claude/skills/grand-maester/SKILL.md + .claude/settings.json hook
+│   │   │   │   ├── codex.ts             # AGENTS.md writer (Codex CLI label)
+│   │   │   │   ├── cursor.ts            # .cursor/rules/grand-maester.mdc
+│   │   │   │   └── generic.ts           # AGENTS.md writer (generic label) — shares writer w/ codex.ts
+│   │   │   └── templates/
+│   │   │       ├── shells/              # TS modules assembling each artifact
+│   │   │       │   ├── claude-code.ts
+│   │   │       │   ├── agents-md.ts     # Shared writer for codex + generic (one file, two labels)
+│   │   │       │   └── cursor.ts
+│   │   │       └── content/             # Raw .md fragments (bundled as text via tsup loader)
+│   │   │           ├── citadel-awareness.md
+│   │   │           ├── state-awareness.md
+│   │   │           └── freshness-awareness.md
 │   │   └── errors.ts                    # Tagged error classes (ConfigError, AuthError, ...)
 │   ├── schemas/
 │   │   ├── citadel.ts                   # zod schema for citadel.yaml + inferred types
@@ -160,6 +182,9 @@ maester/
 | Top-level CLI dispatch | `src/cli/main.ts` | Commander program; routes subcommands and the no-arg interactive menu. |
 | Sync orchestrator | `src/core/sync/runner.ts` | One function per maester; aggregates results; never exits the process. |
 | Status orchestrator | `src/core/status/runner.ts` | Read-only sibling of the sync runner; returns `StatusResult { outcomes[], counts }`; never writes to a destination, the cache, or a provenance marker. |
+| Skill installer | `src/core/skill/runner.ts` | Orchestrates install / upgrade / add-target across selected agent targets; deduplicates targets that share an output path; returns a per-target `SkillInstallOutcome`. |
+| Skill runtime helper | `src/core/skill/runtime.ts` | Backs `maester skill runtime preread` (the Claude Code PreToolUse hook entrypoint) and `maester skill runtime status-summary`. The pre-read helper reuses `runStatus()` from `src/core/status/runner.ts` to derive its verdict. |
+| Skill version | `src/core/skill/version.ts` | `SKILL_VERSION` constant (sourced from package.json at build time) plus a `readInstalledSkillVersion(target)` helper used by the upgrade subcommand. |
 
 ---
 
@@ -324,10 +349,12 @@ Introduced by: [Maester Configuration](features/maester-configuration.md). The `
 export { loadCitadelConfig, loadMaesterConfig } from "./core/config/loader.js";
 export { runSync } from "./core/sync/runner.js";
 export { runStatus } from "./core/status/runner.js";
+export { runSkillInstall, runSkillUpgrade, listSkillTargets } from "./core/skill/runner.js";
 export type { CitadelConfig, Source, AuthRef } from "./schemas/citadel.js";
 export type { MaesterConfig, PublishedDocument } from "./schemas/maester.js";
 export type { SyncResult, SyncOutcome } from "./core/sync/runner.js";
 export type { StatusResult, StatusOutcome, StatusVerdict, BehindReason } from "./core/status/runner.js";
+export type { SkillTargetId, SkillInstallResult, SkillInstallOutcome } from "./core/skill/runner.js";
 ```
 
 Internal modules are not re-exported. Consumers of the library use only what is listed above; everything else is private.
@@ -356,6 +383,12 @@ Internal modules are not re-exported. Consumers of the library use only what is 
 | `maester sync --json` | Sync, emitting one JSON object per line; prompt + spinner layers disabled. |
 | `maester status [names...]` | Read-only freshness check. Optional positional names scope the run to a subset. Exit codes: `0` (all up-to-date), `1` (≥ 1 behind, 0 failed), `2` (≥ 1 failed, or config/invocation error). |
 | `maester status --json` | Status, emitting one JSON object per source on stdout (NDJSON). Same exit-code ladder. |
+| `maester skill install` | Install the Grand Maester skill into the current citadel repo. Interactive multi-select of agent targets when no flags; non-interactive when `--target` is passed (`--target claude-code --target codex` etc.). |
+| `maester skill upgrade` | Refresh every installed target's managed-region content to match the running `maester` version. `--check` reports which targets are outdated and exits non-zero without writing. |
+| `maester skill add-target <id>` | Install an additional agent target alongside any already installed. |
+| `maester skill status` | List installed targets, their on-disk version markers, and whether each is up to date with `SKILL_VERSION`. |
+| `maester skill runtime preread` | Internal helper invoked by installed Claude Code hooks; reads a hook envelope from stdin, runs `maester status` when the targeted path is under the citadel base directory, emits a Claude Code `hookSpecificOutput.additionalContext` payload on stdout. Always exits `0`. |
+| `maester skill runtime status-summary` | Internal helper that prints a one-line summary derived from `runStatus()`. Exit-code ladder mirrors `maester status`. |
 | `maester --help` | Banner + figlet header + command list. |
 | `maester --version` | Banner + version string. |
 
@@ -408,6 +441,10 @@ Each domain operation is a pure function (or a closely-related set of functions)
 | State format dispatch | `src/core/state/format.ts` | Map a file extension to a `(parser, writer)` pair. Supported in v1: `.md`, `.html` / `.htm`, `.yaml` / `.yml`, `.json`, `.txt`. Unsupported extensions return `undefined` (the file is counted as untagged and no inline state is written). |
 | Status runner | `src/core/status/runner.ts` | For each in-scope source: read provenance, call probe, compare, return a `StatusOutcome`. Aggregates a `StatusResult { outcomes, counts }`. Reuses sync's per-source concurrency primitive (default 4, `--concurrency <n>` override). Never throws on per-source failure. Never writes to a destination, the cache, or a marker. See §6.9. |
 | Status probe | `src/core/status/probe.ts` | `probeCommitSha(entry, ctx)` calls `git ls-remote <url> <ref>` (via `src/core/git/client.ts`) to resolve the current commit SHA without cloning. `probeManifest(entry, ctx)` performs a `--filter=blob:none --depth=1` clone + sparse-checkout of `maester.yaml` into a temp dir under `.maester/.status-<rand>/`, parses it against `src/schemas/maester.ts`, and removes the temp dir in a `try/finally`. Both honor the resolved `AuthRef`. |
+| Skill runner | `src/core/skill/runner.ts` | `runSkillInstall(repoRoot, { targets, mode: "install" \| "add-target" })`, `runSkillUpgrade(repoRoot, { check })`, `listSkillTargets()`. Dedupes selected targets by their resolved artifact path before writing; calls each target's writer once. Returns `SkillInstallResult { outcomes, counts }`. Never throws on a single-target failure; per-target failures are returned as outcomes. See §6.10. |
+| Skill target writer | `src/core/skill/targets/*.ts` | Per-agent module exposing `{ id, label, defaultArtifactPath, write(input) }`. The Claude Code writer additionally manages the `.claude/settings.json` hook entry under the dedicated `maester` top-level key. Idempotent — running the writer twice produces byte-identical output. |
+| Skill runtime helper | `src/core/skill/runtime.ts` | `preread(stdinPayload)` returns the Claude Code hook response envelope; calls `runStatus()` only when the targeted path resolves under the citadel `baseDir`; debounces via a small cache file at `.maester/.skill-cache.json`. `statusSummary()` returns a one-line human summary plus an exit-code recommendation. |
+| Managed region | `src/core/skill/managed-region.ts` | Format-specific begin/end marker conventions: HTML comments for Markdown / `.mdc`, a dedicated top-level `maester` key for `.claude/settings.json`. The reader extracts the embedded version; the writer rewrites only what is inside the markers. |
 | Gitignore | `src/core/repo/gitignore.ts` | Append missing entries to `.gitignore`; never reorder or rewrite. Returns the set of lines that were added. |
 
 ### 6.4 External Integrations
@@ -753,6 +790,214 @@ Status writes exactly **nothing** to the citadel destination directories, the pe
 
 The destination-clobber guard ([Gap 6](#gap-6--destination-clobber-guard-before-any-sync-has-run)) does not apply to status because status never writes to a destination. The `--json` redaction rules from §7 (no secrets, no embedded tokens in URLs or error messages) apply identically to status output.
 
+### 6.10 Grand Maester Skill
+
+[Grand Maester Skill](features/grand-maester-skill.md) installs agent-specific integration artifacts into the citadel repository so a host AI agent (Claude Code, Codex CLI, Cursor, or any agent that reads a project-root `AGENTS.md`) reasons over citadel content with three baked-in behaviors: citadel awareness, canon-preferring state awareness, and pre-read freshness checks. The architecture splits cleanly into three pieces — an installer that writes artifacts, per-target writers that own each agent's conventions, and a runtime helper that the active-runtime targets (currently only Claude Code) invoke.
+
+#### Target abstraction
+
+`src/core/skill/targets/index.ts` exposes a registry of target descriptors:
+
+```ts
+type SkillTargetId = "claude-code" | "codex" | "cursor" | "agents-md";
+
+type SkillTarget = {
+  id: SkillTargetId;
+  label: string;                          // Human-readable name shown in pickers
+  artifactPaths: readonly string[];       // Repo-relative paths this target writes
+  write: (input: SkillWriteInput) => Promise<SkillWriteOutcome>;
+};
+```
+
+The v1 registry contains four targets:
+
+| Target id | Label | Artifact path(s) |
+|---|---|---|
+| `claude-code` | Claude Code | `.claude/skills/grand-maester/SKILL.md` + a managed `maester` key in `.claude/settings.json` |
+| `codex` | Codex CLI | `AGENTS.md` at the repo root (managed region) |
+| `cursor` | Cursor | `.cursor/rules/grand-maester.mdc` |
+| `agents-md` | Generic `AGENTS.md` | `AGENTS.md` at the repo root (managed region) |
+
+Codex CLI and Generic `AGENTS.md` are exposed as **separate target identifiers** so each appears in the picker, but both delegate their write to a single shared writer (`src/core/skill/templates/shells/agents-md.ts`). The installer deduplicates by output artifact path before invoking writers — selecting both targets in one run produces exactly one `AGENTS.md` and exactly one write. The install outcome still lists both target ids so the user understands which agents are now covered. See Gap 27.
+
+#### Managed-region conventions
+
+Every artifact carries an idempotent managed region so upgrades can refresh content without clobbering anything the user has added outside it:
+
+- **Markdown / `.mdc`** (`SKILL.md`, `AGENTS.md`, Cursor rule): HTML-comment markers — `<!-- maester:skill:begin v=<SKILL_VERSION> -->` and `<!-- maester:skill:end -->`. The reader extracts the version from the begin tag. The writer touches only what is between the markers; everything before the begin marker and after the end marker is left exactly as the user wrote it. When the file does not yet exist, the writer creates it with only the managed region plus a one-line preamble explaining what the file is.
+- **`.claude/settings.json`**: a dedicated top-level `"maester"` object with an embedded `"version"` field and a `"hooks"` array. The writer reads, mutates, and re-serializes only that key; every other top-level field in `settings.json` is preserved byte-for-byte (round-tripped through a JSON parser that preserves key order). When the file does not exist, the writer creates it with just the `maester` block.
+
+Both writers are idempotent — running install twice against an up-to-date target produces byte-identical output. See Gap 31.
+
+#### Versioning
+
+`src/core/skill/version.ts` exports a `SKILL_VERSION` constant whose value is the `version` field from `package.json`, resolved at build time via `src/package-meta.ts`. Each artifact embeds that version in its begin marker (Markdown) or `maester.version` field (JSON). On `maester skill upgrade`, the runner reads the marker out of each installed artifact, compares with the running `SKILL_VERSION`, and refreshes any target whose marker is older. `--check` reports the diff and exits non-zero without writing. The constant is not a separate "skill version" — it tracks `maester` itself so upgrade detection lines up exactly with package upgrades. See Gap 32.
+
+#### Templates: shells + content
+
+Long-form instruction prose lives as `.md` files under `src/core/skill/templates/content/`:
+
+```
+templates/content/
+├── citadel-awareness.md         # Where citadel content lives, how it is organized
+├── state-awareness.md           # Canon-preferring, draft-tolerant policy
+└── freshness-awareness.md       # When to run `maester status`; how to react
+```
+
+Per-target shells under `src/core/skill/templates/shells/` (TypeScript modules) compose those fragments into the final artifact with format-specific scaffolding — front matter / preamble, managed-region markers, dynamic substitutions (`baseDir`, `SKILL_VERSION`, etc.). The `agents-md.ts` shell is shared by both the `codex` and `agents-md` targets. `tsup` bundles the `.md` files as text via a `loader: { '.md': 'text' }` config entry (declared in `tsup.config.ts`); at runtime the shells receive the fragments as plain string imports — no filesystem reads from the published package. See Gap 30.
+
+#### Standalone CLI surface
+
+`src/cli/commands/skill.ts` registers a `skill` subcommand group on the root Commander program. Verbs:
+
+| Verb | Behavior |
+|---|---|
+| `install` | Interactive multi-select target picker when no flags; `--target <id>` (repeatable) selects targets non-interactively. Refuses to write when invoked outside a citadel-bearing repository (exit `2`). Writes are idempotent; running `install` against already-installed targets is a no-op. |
+| `upgrade` | Refreshes every installed target's managed region to match `SKILL_VERSION`. `--check` reports the diff and exits non-zero (exit `1`) when any target is outdated without writing. |
+| `add-target <id>` | Adds a target alongside any already installed. Equivalent to `install --target <id>` against an already-installed skill. |
+| `status` | Lists installed targets with their on-disk version markers and an up-to-date / outdated verdict. Exit `0` when every installed target matches `SKILL_VERSION`. Exit `1` when at least one is outdated. Exit `2` when no targets are installed. |
+| `runtime preread` | Internal — see §6.10.2 below. Reads a Claude Code hook envelope from stdin; emits a hook response envelope on stdout. |
+| `runtime status-summary` | Internal — one-line human summary derived from `runStatus()`; exit-code ladder mirrors `maester status`. |
+
+`runtime` verbs are intentionally namespaced under `skill` (not promoted to top-level) so the install surface and the agent-facing surface evolve together. They are documented in `--help` but framed as internal — typical users do not invoke them directly. See Gap 29.
+
+#### Init walkthrough integration
+
+The citadel-init flow ends with a single opt-in step, recommended-by-default per [Grand Maester Skill P0](features/grand-maester-skill.md):
+
+```
+  Install the Grand Maester agent skill? (Y/n) ▸ y
+  
+  Choose one or more agent targets
+  
+    ◉  Claude Code
+    ◉  Codex CLI
+    ◯  Cursor
+    ◯  Generic AGENTS.md
+  
+  space toggle · ↵ continue
+```
+
+Accepting calls `runSkillInstall(repoRoot, { targets, mode: "install" })`, the same entry the standalone command uses. Declining leaves zero artifacts written. The prompt appears only when init is otherwise going to succeed — it is not asked on cancellation paths. The skill install is the very last step of init so a cancellation here still leaves a valid citadel config in place. See [Grand Maester Skill P0 — "Install at init"](features/grand-maester-skill.md#4-capabilities).
+
+#### 6.10.1 Install / upgrade flow
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant CLI as src/cli/commands/skill.ts
+    participant Runner as src/core/skill/runner.ts
+    participant Reg as src/core/skill/targets/index.ts
+    participant Writers as targets/<id>.ts
+    participant MR as src/core/skill/managed-region.ts
+    participant FS as Filesystem
+
+    U->>CLI: maester skill install [--target id ...]
+    CLI->>Runner: runSkillInstall(repoRoot, { targets, mode })
+    Runner->>Reg: lookup(targets) -> SkillTarget[]
+    Runner->>Runner: dedupe by artifactPaths (codex + agents-md -> one writer)
+    loop For each selected writer
+        Runner->>Writers: write({ repoRoot, skillVersion, citadelBaseDir })
+        Writers->>FS: read existing artifact (if any)
+        Writers->>MR: parse existing managed region (extract installed version)
+        Writers->>MR: rebuild managed region with SKILL_VERSION + content
+        Writers->>FS: write artifact (idempotent; byte-identical if unchanged)
+        Writers-->>Runner: SkillInstallOutcome { id, artifactPath, action }
+    end
+    Runner-->>CLI: SkillInstallResult { outcomes, counts }
+    CLI->>U: human-readable summary listing every target by id and label
+    Note over CLI: exit 0 on success; exit 2 if not a citadel-bearing repo
+```
+
+`SkillInstallOutcome.action` is one of `installed` (no prior artifact), `upgraded` (prior artifact present, version differed), `unchanged` (prior artifact present, content byte-identical), or `failed` (with an `error` field). The runner never throws on a single-target failure; the per-target outcome carries the error. Exit code is `0` when every outcome is `installed` / `upgraded` / `unchanged`, `1` when at least one is `failed`, `2` for invocation errors.
+
+#### 6.10.2 Claude Code runtime hook
+
+Claude Code is the only v1 target with active runtime — the others are instruction-only and rely on the host agent to honor the artifact text. On Claude Code, the freshness check is wired as a `PreToolUse` hook scoped to citadel reads. The hook entry written to `.claude/settings.json` under the managed `maester` key:
+
+```json
+{
+  "maester": {
+    "version": "<SKILL_VERSION>",
+    "hooks": {
+      "PreToolUse": [
+        {
+          "matcher": "Read|Glob|Grep",
+          "hooks": [
+            { "type": "command", "command": "npx maester skill runtime preread" }
+          ]
+        }
+      ]
+    }
+  }
+}
+```
+
+Why `npx maester`: invocation is portable across machines whether `maester` is a `devDependency` or globally installed. The hook script reads Claude Code's tool-call envelope from stdin (the standard hook contract), so `npx --no-install maester ...` and locally-resolved binaries both work without environment-specific adjustment.
+
+The runtime flow:
+
+```mermaid
+sequenceDiagram
+    participant CC as Claude Code
+    participant Hook as maester skill runtime preread
+    participant Cache as .maester/.skill-cache.json
+    participant Status as src/core/status/runner.ts
+    participant Remote as Git remote
+
+    CC->>Hook: stdin = { tool_name, tool_input.file_path, ... }
+    Hook->>Hook: resolve path vs citadel baseDir
+    alt path outside citadel baseDir
+        Hook-->>CC: exit 0; stdout = "" (no additionalContext)
+    else path inside citadel
+        Hook->>Cache: read last-check timestamp
+        alt within debounce TTL (default 300s; MAESTER_SKILL_STATUS_TTL override)
+            Hook->>Hook: reuse cached verdict
+        else stale or absent
+            Hook->>Status: runStatus(config, { scope: null })
+            Status->>Remote: ls-remote / manifest probes
+            Remote-->>Status: SHAs + manifests
+            Status-->>Hook: StatusResult
+            Hook->>Cache: write { ts, counts, verdict } atomically
+        end
+        alt verdict = up-to-date
+            Hook-->>CC: exit 0; stdout = {} (empty envelope)
+        else verdict = behind | failed
+            Hook-->>CC: exit 0; stdout = { hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: "Citadel is behind: <summary>. Run `maester sync` to refresh." } }
+        end
+    end
+```
+
+The hook always exits `0` and never blocks the tool call — its job is to inform the agent, not to gate the read. The decision to sync remains with the agent (which surfaces it to the user) and the user (who runs sync). The debounce cache is a tiny JSON file at `.maester/.skill-cache.json` covered by the same `.maester/` line init appends to `.gitignore`; no new ignore entries are required. See Gap 28.
+
+#### Runtime helper output contract
+
+`maester skill runtime preread` and `maester skill runtime status-summary` are versioned interfaces:
+
+```ts
+// preread response (Claude Code hook envelope) — emitted on stdout
+type PrereadResponse =
+  | {}                            // no-op
+  | {
+      hookSpecificOutput: {
+        hookEventName: "PreToolUse";
+        additionalContext: string;
+      };
+    };
+
+// status-summary stdout — one line, human-readable
+// e.g. "✓ all 3 sources up to date" | "! 1 source behind: docs (remote-ref-advanced)"
+```
+
+Both helpers emit nothing on stdout when there is nothing to say; any logging goes to stderr. The structured `preread` response is intentionally minimal (only the Claude Code envelope shape), so a host-agent upgrade that adds fields to the hook protocol can be accommodated without changing installed artifacts. Hook scripts written against the v1 contract ignore unknown fields, so additive future changes remain non-breaking. See Gap 33.
+
+#### What the skill installer never does
+
+- It never writes secret values to disk. The installed artifacts carry only the citadel's structural hints (the `baseDir`, the `maester` CLI invocation), never the citadel's source URLs and never any token value.
+- It never modifies `gspec/`, the citadel config, the maester config, or any source content. Skill artifacts live in agent-specific locations only.
+- It never installs the host agent. The user is responsible for having Claude Code, Codex CLI, or Cursor available; the installed artifacts have no effect on a machine without the corresponding agent.
+- It never gates tool calls or blocks reads. Even on Claude Code, the hook is informational — exit `0` always.
+
 ---
 
 ## 7. Authentication & Authorization Architecture
@@ -832,6 +1077,11 @@ The citadel-init walkthrough enforces the "name, not value" rule with both copy 
 | `<repo-root>/maester.yaml` | `src/schemas/maester.ts` | [Maester Configuration](features/maester-configuration.md) | [Maester Sync](features/maester-sync.md), when this repo is consumed as a source |
 | `<repo-root>/.maester/cache/<name>/` | n/a (managed git clones) | Sync runner | Sync runner |
 | `<repo-root>/<resolved-destination>/.maester-source.json` | `src/core/sync/provenance.ts` | Sync runner | Sync runner (destination-clobber guard). `<resolved-destination>` is `entry.destination` if set, otherwise `<baseDir>/<entry.name>/` with `baseDir` defaulting to `citadel`. |
+| `<repo-root>/.claude/skills/grand-maester/SKILL.md` | n/a (managed Markdown w/ managed-region markers) | Grand Maester skill installer (Claude Code target) | Claude Code at runtime. Committed; not gitignored. |
+| `<repo-root>/.claude/settings.json` (managed `maester` key only) | n/a (JSON w/ a managed top-level key) | Grand Maester skill installer (Claude Code target) | Claude Code at runtime. Committed (project-level settings); `.claude/settings.local.json` remains the user-local file and is untouched by the installer. |
+| `<repo-root>/AGENTS.md` (managed region) | n/a (Markdown w/ managed-region markers) | Grand Maester skill installer (Codex CLI and/or generic targets) | Any host agent that reads project-level `AGENTS.md`. Committed; not gitignored. |
+| `<repo-root>/.cursor/rules/grand-maester.mdc` | n/a (Markdown w/ managed-region markers) | Grand Maester skill installer (Cursor target) | Cursor at runtime. Committed; not gitignored. |
+| `<repo-root>/.maester/.skill-cache.json` | n/a (small JSON cache) | Grand Maester runtime hook (Claude Code) | Same hook. Lives under `.maester/`, already covered by the line init appends to `.gitignore`. |
 | `<repo-root>/.gitignore` (append-only) | n/a | Citadel init + sync runner | git |
 
 ### Example `citadel.yaml`
@@ -1000,7 +1250,7 @@ documents:
 |---|---|---|
 | `package.json` | Manifest. | `"type": "module"`, `"bin": { "maester": "bin/maester.mjs" }`, `"engines": { "node": ">=24" }`, `"sideEffects": false`. |
 | `tsconfig.json` | TypeScript config. | `"target": "ES2023"`, `"module": "NodeNext"`, `"moduleResolution": "NodeNext"`, `"strict": true`, `"noUncheckedIndexedAccess": true`, `"exactOptionalPropertyTypes": true`, `"verbatimModuleSyntax": true`. |
-| `tsup.config.ts` | Build. | `entry: { index: "src/index.ts", "cli/main": "src/cli/main.ts" }`, `format: ["esm"]`, `dts: true`, `clean: true`, `target: "node24"`. |
+| `tsup.config.ts` | Build. | `entry: { index: "src/index.ts", "cli/main": "src/cli/main.ts" }`, `format: ["esm"]`, `dts: true`, `clean: true`, `target: "node24"`, `loader: { ".md": "text" }` (inlines `src/core/skill/templates/content/*.md` as raw string imports — see [Gap 30](#gap-30--skill-template-storage-hybrid-ts-shells--md-content)). |
 | `vitest.config.ts` | Tests. | Two project pools: `unit` (parallel) and `e2e` (sequential). `test.include: ["test/**/*.test.ts"]`. |
 | `biome.json` | Lint + format. | `"organizeImports": "on"`, `"linter.rules.recommended": true`, project-specific overrides for `noConsole` (allowed in `src/cli/` and `src/ui/logger.ts` only). |
 | `.github/workflows/ci.yml` | Pull-request gate. | Matrix on Node `24.x` and current LTS. Stages: install → biome → typecheck → test → build. |
@@ -1292,6 +1542,89 @@ The init walkthrough runs the same validator before writing the file so collisio
 1. **Pinned-SHA short-circuit.** When `source.ref` matches `^[0-9a-f]{40}$`, the probe does not call `ls-remote`. The "resolved SHA" is `source.ref` itself. The remote-ref-advanced check then degenerates to `provenance.commitSha === source.ref`: a match is `up-to-date`; a mismatch is correctly reported as `behind` with reason `remote-ref-advanced` (the citadel was synced at a different SHA than what the config now pins). The manifest-changed check still runs for manifest-driven pinned sources, because the pinned tree's manifest may still differ from what was recorded; the probe fetches `maester.yaml` at `source.ref` via the same partial-clone + sparse-checkout primitive.
 
 2. **Annotated tag dereferencing.** `listRemoteRef(url, ref)` requests both `refs/tags/<ref>` and `refs/tags/<ref>^{}` and, when the peeled form is present, returns the **dereferenced commit SHA**. This matches what sync's existing `checkoutRef` resolves to (which calls `git rev-parse HEAD` after checking out the ref), so status and sync agree on the SHA for the same tag.
+
+#### Gap 27 — AGENTS.md target dedup (Codex CLI vs generic)
+
+**What's missing.** [Grand Maester Skill](features/grand-maester-skill.md) lists both **Codex CLI** and **Generic `AGENTS.md`** as v1 targets, but both consume the same `AGENTS.md` file at the repo root. Without a stated dedup rule, selecting both in one install could write the file twice (race) or list two unrelated outcomes for one artifact.
+
+**Why it matters.** The picker presents two distinct labels because the user thinks of them as different agents; the filesystem sees one file.
+
+**Resolution.** (User-confirmed.) The target registry exposes `codex` and `agents-md` as **separate target identifiers** so both appear in the install picker, but both delegate to a single shared writer at `src/core/skill/templates/shells/agents-md.ts`. The installer dedupes by output artifact path before invoking writers — selecting both targets in one run produces exactly one `AGENTS.md` and exactly one write call. The `SkillInstallResult` still reports an outcome for each selected target id (sharing the same `artifactPath`), so the summary line names both agents the install covers. The same dedup rule generalizes to any future targets that share an artifact path.
+
+#### Gap 28 — Claude Code freshness hook scope
+
+**What's missing.** [Grand Maester Skill P0](features/grand-maester-skill.md) requires that the freshness check runs "before substantial citadel reads" on platforms that support hooks. Claude Code supports both `SessionStart` (one check per session) and `PreToolUse` (check before each matching tool call); the architecture has to pick one and define the matching predicate.
+
+**Why it matters.** A `SessionStart`-only hook is the cheapest network footprint but misses staleness that develops mid-session and pays an unconditional cost on session start even when the developer never reads citadel content. An unscoped `PreToolUse` hook would run `maester status` before every `Read` — wildly over-eager. A path-scoped `PreToolUse` hook is the only option that fires at the exact moment that matters without firing on routine non-citadel work.
+
+**Resolution.** (User-confirmed.) `PreToolUse` hook with a `matcher: "Read|Glob|Grep"` and a path-scoping predicate inside the hook script:
+
+1. The installed `.claude/settings.json` `maester.hooks.PreToolUse` entry invokes `npx maester skill runtime preread`.
+2. The hook script reads Claude Code's tool-call envelope from stdin, extracts `tool_input.file_path` (or the equivalent for Glob/Grep), and resolves it against `process.cwd()`.
+3. The script reads the citadel config to derive the resolved `baseDir`. When the targeted path is **outside** the citadel base directory, the script exits `0` with empty stdout — no network call, no additionalContext, no visible side effect.
+4. When the targeted path is **inside** the citadel, the script consults the debounce cache at `.maester/.skill-cache.json` (default TTL 300 s, configurable via `MAESTER_SKILL_STATUS_TTL`). On cache hit, it reuses the cached verdict. On cache miss or stale entry, it calls `runStatus()` and writes a new cache entry atomically.
+5. On `up-to-date`, the script emits an empty hook response (`{}`). On `behind` or `failed`, it emits `{ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: "..." } }` with a one-line summary and a pointer to `maester sync`. The script always exits `0` — it informs but never blocks the read.
+
+The debounce cache is small and lives under the already-gitignored `.maester/` directory, so no new `.gitignore` entries are required (see [Gap 3](#gap-3--local-clone-cache-location)).
+
+#### Gap 29 — Skill CLI verb shape
+
+**What's missing.** The standalone management surface for the Grand Maester needs a stable command shape. The PRD names install / upgrade / add-target / switch-target as required verbs but does not commit to a verb grouping.
+
+**Why it matters.** Top-level flat verbs (`maester install-skill`, `maester upgrade-skill`) balloon the `--help` list and leave no obvious home for runtime helpers. A group prefix keeps related verbs together and reserves namespace for future runtime helpers and per-target diagnostics.
+
+**Resolution.** (User-confirmed.) `maester skill <verb>` as a Commander subcommand group on the root program. Verbs: `install`, `upgrade`, `add-target`, `status`, `runtime <op>`. The `runtime` namespace contains internal helpers invoked by installed hooks (`preread`, `status-summary`) — these are documented in `--help` but framed as internal; routine users do not type them. Future per-target diagnostics (e.g. `maester skill doctor`) hang off the same group without polluting top-level help. See §6.10.
+
+#### Gap 30 — Skill template storage (hybrid TS shells + .md content)
+
+**What's missing.** Skill artifacts mix long-form instruction prose (the agent-facing text) with format-specific structural scaffolding (managed-region markers, front matter, dynamic substitutions). Both could live as TypeScript template literals, both as `.md` files, or split. The architecture has to commit to a single approach so the bundler config is stable.
+
+**Why it matters.** Pure TS template literals make the prose hard to author and lint (no markdown tooling, escape-character noise). Pure `.md` files lose the typed substitution surface and require runtime FS reads from the published package. The split shape preserves both editorial quality and typed assembly.
+
+**Resolution.** (User-confirmed.) Hybrid:
+
+- TypeScript "shell" modules at `src/core/skill/templates/shells/<id>.ts` own the per-target structural scaffolding (preamble, managed-region markers, dynamic substitutions like `baseDir` and `SKILL_VERSION`).
+- Raw `.md` fragments at `src/core/skill/templates/content/<topic>.md` own the long-form instruction prose (`citadel-awareness.md`, `state-awareness.md`, `freshness-awareness.md`).
+- The shells import the fragments as plain string exports. `tsup` is configured with `loader: { ".md": "text" }` (see [§8 → tsup.config.ts](#configuration-files-in-this-repository--the-package-itself)) so the bundler inlines the markdown content into the JS output at build time. At runtime the published package contains no `.md` files; the shells already have the content as in-memory strings.
+- Editing instruction prose is a single-file change against an `.md` file; editing per-target structure is a single-file change against a `.ts` shell. The shared `agents-md.ts` shell is the only writer for both the `codex` and `agents-md` targets (see Gap 27).
+
+#### Gap 31 — Managed-region marker conventions
+
+**What's missing.** Every installed artifact must let `upgrade` refresh the maester-managed content without clobbering anything the user has added around it. The PRD names "managed region" as the convention but does not define the marker shape for each format.
+
+**Why it matters.** Two distinct artifact formats are in play: Markdown (`.md`, `.mdc`) and JSON (`.claude/settings.json`). Their marker syntaxes have to be format-native or the writer will produce invalid files.
+
+**Resolution.** Format-specific markers, defined in `src/core/skill/managed-region.ts`:
+
+- **Markdown / `.mdc`.** Begin marker: `<!-- maester:skill:begin v=<SKILL_VERSION> -->` on its own line. End marker: `<!-- maester:skill:end -->` on its own line. The reader extracts `v=<...>` from the begin tag for upgrade comparisons. The writer rewrites only what is between the markers and preserves bytes before the begin marker and after the end marker exactly. When the file does not yet exist, the writer creates it with a one-line human preamble (explaining what the file is) followed by the managed region.
+
+- **`.claude/settings.json`.** A dedicated top-level `"maester"` object key containing `{ "version": "<SKILL_VERSION>", "hooks": { ... } }`. The reader parses the JSON with a key-order-preserving parser, mutates only the `maester` key, and re-serializes. Every other top-level field — `permissions`, user-authored hooks not under `maester`, etc. — is preserved byte-for-byte (modulo whitespace produced by the formatter). When the file does not exist, the writer creates it with only the `maester` block.
+
+Both writers are idempotent — running install twice against an up-to-date target produces byte-identical output, validated by a unit test asserting `writeArtifact(input) === writeArtifact(writeArtifact(input))`.
+
+#### Gap 32 — Skill version source and propagation
+
+**What's missing.** Each installed artifact embeds a version marker so `maester skill upgrade` can detect outdatedness. The architecture has to commit to where the version number originates so install and upgrade agree.
+
+**Why it matters.** A drifting source of truth (e.g., a separate `skill-version` constant) would let install-time and upgrade-time disagree, producing spurious "outdated" reports. Tying the marker to a value that already ships with each release keeps the contract simple.
+
+**Resolution.** `SKILL_VERSION` is a string constant exported by `src/core/skill/version.ts`, sourced at build time from `package.json` via the existing `src/package-meta.ts` reader. Every installed artifact embeds the value in its begin marker (Markdown) or `maester.version` field (JSON). On `maester skill upgrade`, the runner reads the marker out of each installed artifact, compares with the current `SKILL_VERSION`, and refreshes any target whose marker is older. `--check` reports the diff and exits non-zero (exit `1`) without writing. The constant does not track a separate "skill schema version" — it tracks `maester` itself so upgrade detection lines up exactly with package upgrades.
+
+#### Gap 33 — Runtime helper output contract
+
+**What's missing.** Installed Claude Code hook entries invoke `maester skill runtime preread`. The output shape that hook script writes to stdout is the contract between an installed artifact and the running `maester` CLI. Without versioning, future revisions of the helper could silently break artifacts installed under an older `maester`.
+
+**Why it matters.** Claude Code's hook protocol expects a specific JSON response envelope; future Claude Code or `maester` revisions may want to add fields. The architecture has to commit to a contract that survives additive changes.
+
+**Resolution.**
+
+1. **`preread` stdout shape.** Either `{}` (no-op — exit `0` with empty body acceptable too) or `{ "hookSpecificOutput": { "hookEventName": "PreToolUse", "additionalContext": "<one-line summary>" } }`. No additional top-level fields are introduced in v1. Hook scripts written against the v1 contract ignore unknown fields, so additive future fields remain non-breaking.
+
+2. **`status-summary` stdout shape.** A single human-readable line written to stdout (e.g., `✓ all 3 sources up to date` or `! 1 source behind: docs (remote-ref-advanced)`). Exit-code ladder mirrors `maester status` (`0` / `1` / `2`).
+
+3. **Side-channel discipline.** Both helpers emit nothing on stdout when there is nothing to say. Diagnostic logging (errors during config load, redacted network errors, etc.) goes to stderr so a hook caller can swallow stderr without losing the structured stdout response.
+
+4. **No secret leakage.** The `--json` redaction rules from §7 (no embedded tokens in URLs or error messages) apply identically to the runtime helpers — `additionalContext` is built from `StatusOutcome` fields that have already passed sync's redactor.
 
 ### Assumptions
 

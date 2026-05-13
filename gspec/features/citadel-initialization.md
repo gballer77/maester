@@ -37,6 +37,7 @@ implementation-order: 2
 - Detecting an existing citadel and refusing to overwrite without explicit user direction
 - Updating `.gitignore` with any paths the citadel should not commit (e.g. local clone cache directory)
 - Basic validation of inputs (non-empty name, well-formed URL, unique source names, well-formed `includes` entries)
+- Offering an optional, recommended-by-default step at the end of the walkthrough to install the Grand Maester agent skill — including target-agent selection — delegated to [Grand Maester Skill](grand-maester-skill.md); declining the prompt completes init normally with zero skill artifacts written
 
 **Out-of-scope:**
 - Performing the actual sync (delivered by [Maester Sync](maester-sync.md))
@@ -117,6 +118,7 @@ implementation-order: 2
 
 - **Maester Sync** ([maester-sync.md](maester-sync.md)) — init scaffolds the sync entrypoint, but the runtime behavior of sync is defined and delivered by that feature. Init must produce a config file shape that Maester Sync can consume.
 - **Maester Configuration** ([maester-configuration.md](maester-configuration.md)) — Shares the `npx maester` top-level menu entrypoint. The two flows are siblings under that menu; neither depends on the other's runtime behavior.
+- **Grand Maester Skill** ([grand-maester-skill.md](grand-maester-skill.md)) — Init invokes the Grand Maester install flow when the user accepts the optional install step. The install flow (target-agent selection and artifact writing) is owned by that feature; init only owns the prompt and the handoff.
 
 **External dependencies:**
 - A package registry / distribution channel that makes `npx maester` executable without a prior global install

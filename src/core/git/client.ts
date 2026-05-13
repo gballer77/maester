@@ -118,6 +118,66 @@ export async function clearWorktree(workDir: string): Promise<void> {
   await rm(workDir, { recursive: true, force: true });
 }
 
+export type ListRemoteRefInput = {
+  url: string;
+  ref: string | undefined;
+  useTokenInUrl?: string;
+};
+
+export async function listRemoteRef(input: ListRemoteRefInput): Promise<string> {
+  const url = input.useTokenInUrl ? injectToken(input.url, input.useTokenInUrl) : input.url;
+  const git = simpleGit();
+  const target = input.ref ?? "HEAD";
+  let output: string;
+  try {
+    output = await git.listRemote([url, target]);
+  } catch (err) {
+    throw new RefNotFoundError(target, input.url, err);
+  }
+  const sha = parseListRemoteOutput(output, target);
+  if (!sha) {
+    throw new RefNotFoundError(target, input.url);
+  }
+  return sha;
+}
+
+function parseListRemoteOutput(output: string, target: string): string | undefined {
+  const lines = output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  if (lines.length === 0) return undefined;
+
+  let primary: string | undefined;
+  let peeled: string | undefined;
+  for (const line of lines) {
+    const match = line.match(/^([0-9a-f]{40})\s+(\S+)$/);
+    if (!match) continue;
+    const sha = match[1];
+    const refName = match[2];
+    if (!sha || !refName) continue;
+    if (refName === target) {
+      primary = sha;
+      continue;
+    }
+    if (matchesRefName(refName, target)) {
+      primary = sha;
+    }
+    if (refName.endsWith("^{}") && matchesRefName(refName.slice(0, -3), target)) {
+      peeled = sha;
+    }
+  }
+  return peeled ?? primary;
+}
+
+function matchesRefName(refName: string, target: string): boolean {
+  if (refName === target) return true;
+  if (refName === `refs/heads/${target}`) return true;
+  if (refName === `refs/tags/${target}`) return true;
+  if (refName === `refs/remotes/origin/${target}`) return true;
+  return false;
+}
+
 function refNotFoundFromError(err: unknown): boolean {
   const msg = err instanceof Error ? `${err.message}\n${err.stack ?? ""}` : String(err);
   return (

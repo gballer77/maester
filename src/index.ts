@@ -7,6 +7,15 @@ export type {
   SyncOptions,
   ProgressEvent,
 } from "./core/sync/runner.js";
+export { runStatus } from "./core/status/runner.js";
+export type {
+  BehindReason,
+  StatusCounts,
+  StatusOptions,
+  StatusOutcome,
+  StatusResult,
+  StatusVerdict,
+} from "./core/status/runner.js";
 export type { CitadelConfig, Source, AuthRef } from "./schemas/citadel.js";
 export type { MaesterConfig, PublishedDocument } from "./schemas/maester.js";
 export {

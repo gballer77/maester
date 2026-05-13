@@ -62,74 +62,74 @@ spec-version: v1
 
 ## 4. Capabilities
 
-- [ ] **P0**: Status can be invoked from the repository root with a single command
+- [x] **P0**: Status can be invoked from the repository root with a single command
   - The status entrypoint is runnable without arguments and checks every configured source
   - Running outside a citadel-bearing repository exits with a clear error and exit code `2`
   - The command produces human-readable output that names each source as it is checked
   - The command performs no writes to the citadel destination directories, no writes to provenance markers, and no writes to the local cache beyond what the network checks themselves require
 
-- [ ] **P0**: Status reads and validates the citadel configuration before doing any work
+- [x] **P0**: Status reads and validates the citadel configuration before doing any work
   - A missing config file produces a clear, actionable error and exit code `2`, referencing how to create one
   - A malformed config (invalid YAML / schema violation) produces a clear error pointing at the offending field and exit code `2`
   - No network operations occur until config validation has passed
 
-- [ ] **P0**: Status reports "never synced" for any configured source that has no recorded provenance
+- [x] **P0**: Status reports "never synced" for any configured source that has no recorded provenance
   - A source whose destination directory does not exist, or exists without a recognized provenance marker, is reported as `behind` with the reason `never-synced`
   - The "never synced" determination is made before any network call for that source; no auth or fetch is attempted
   - The recommended action shown to the user references running sync
 
-- [ ] **P0**: Status reports "behind" when a source's configured ref now resolves to a newer commit than its recorded provenance
+- [x] **P0**: Status reports "behind" when a source's configured ref now resolves to a newer commit than its recorded provenance
   - For each previously-synced source, status resolves the configured ref against the remote and compares the resolved commit SHA to the one recorded in the source's provenance marker
   - When the resolved SHA differs from the recorded SHA in the direction of "newer / different upstream", the source is reported as `behind` with the reason `remote-ref-advanced` and includes both the recorded SHA and the newly-resolved SHA in the per-source output
   - When the resolved SHA matches the recorded SHA, the source is reported as `up-to-date`
   - The comparison is read-only against the remote — no working copy is updated and no destination file is touched
 
-- [ ] **P0**: For manifest-driven sources, status reports "behind" when the remote publish surface has changed
+- [x] **P0**: For manifest-driven sources, status reports "behind" when the remote publish surface has changed
   - For sources whose effective filter set comes from the remote `maester.yaml` (i.e. no citadel-side `includes` is set), status compares the remote manifest's current publish surface to the filter set recorded in the source's provenance marker
   - When the publish surface has changed (entries added, removed, or modified in a way that would change the set of files materialized), the source is reported as `behind` with the reason `manifest-changed`
   - This signal is independent of and can co-occur with `remote-ref-advanced`; when both apply, both reasons are surfaced in the per-source output
   - Includes-driven sources are not subject to this check (their filter set is owned by the citadel, not the remote) and the manifest-changed check is skipped for them
 
-- [ ] **P0**: Status authenticates using environment-variable references resolved at runtime
+- [x] **P0**: Status authenticates using environment-variable references resolved at runtime
   - For sources with token auth, the token is read from the configured environment variable at execution time using the same resolution rules as sync
   - A missing required environment variable causes that source to be reported as `failed` with a clear message naming the missing variable; other sources continue to be checked
   - No secret value is ever printed, logged, or written to disk by status output
 
-- [ ] **P0**: Status uses a behind-aware exit code
+- [x] **P0**: Status uses a behind-aware exit code
   - Exit code is `0` when every checked source is reported as `up-to-date`
   - Exit code is `1` when at least one checked source is reported as `behind`, and zero sources are reported as `failed`
   - Exit code is `2` when at least one checked source is reported as `failed`, or when the status check could not complete (e.g. missing/invalid config, the command was invoked outside a citadel)
   - When both `behind` and `failed` sources are present in the same run, exit code `2` takes precedence (the user should be made aware of the failure)
   - Exit-code semantics are documented in the CLI's help output so agents and CI scripts can rely on them
 
-- [ ] **P0**: Status continues past per-source failures and reports them at the end
+- [x] **P0**: Status continues past per-source failures and reports them at the end
   - A failure to authenticate against, fetch from, or query one source does not abort the run for the remaining sources
   - A final summary lists every checked source with its verdict (`up-to-date`, `behind`, or `failed`) and an error message for each `failed` source
   - The summary reports a count of each verdict so a caller can see "N of M sources behind" at a glance
 
-- [ ] **P0**: User can scope a status run to one or more named sources
+- [x] **P0**: User can scope a status run to one or more named sources
   - The entrypoint accepts a list of source names and checks only those
   - An unknown name produces a clear error and exits with code `2` before any network work begins
   - Every capability above applies identically to the scoped subset, including the exit-code semantics (`0` if every scoped source is up to date, `1` if any is behind, `2` if any failed)
 
-- [ ] **P1**: Status output is machine-readable when requested
+- [x] **P1**: Status output is machine-readable when requested
   - A `--json` flag emits structured per-source results suitable for agent and CI consumption, including: source name, verdict (`up-to-date` / `behind` / `failed`), one or more reason codes for `behind` (`never-synced`, `remote-ref-advanced`, `manifest-changed`), an error message for `failed`, and where applicable the recorded and resolved commit SHAs
   - The default human-readable output remains the standard mode when `--json` is not passed
   - The structured output includes the same top-level counts (up-to-date / behind / failed) so an agent can branch on a single field
   - Exit-code semantics are identical in both output modes
 
-- [ ] **P1**: Status output gives the user a clear next-step pointer
+- [x] **P1**: Status output gives the user a clear next-step pointer
   - When at least one source is `behind`, the human-readable output names the sync command and (where applicable) suggests the specific scoped invocation that would refresh the behind sources
   - When every checked source is `up-to-date`, the output makes that explicit ("Nothing to sync.")
   - When at least one source is `failed`, the human-readable output points the user at the per-source error message
   - These hints appear only in the human-readable mode; structured output remains a clean data surface
 
-- [ ] **P1**: Status reuses sync's network and auth machinery without re-implementing it
+- [x] **P1**: Status reuses sync's network and auth machinery without re-implementing it
   - The remote-ref resolution and manifest fetch share whatever underlying git / network / auth code paths the sync command already uses, so a configuration that authenticates successfully under sync authenticates successfully under status
   - The local cache used by sync may be read by status, but status does not promote, populate, or invalidate it on a source's behalf — any reads must be free of side effects from the citadel's point of view
   - Network errors surface with the same shape and redaction guarantees as sync (no embedded tokens, no leaked env-var values)
 
-- [ ] **P2**: Status output adapts when there are no sources configured
+- [x] **P2**: Status output adapts when there are no sources configured
   - A citadel config with zero sources produces a clear, calm "no sources configured" message and exit code `0`
   - The empty-sources case is also represented faithfully in `--json` output (an empty per-source array and all counts at zero)
 

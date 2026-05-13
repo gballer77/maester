@@ -63,19 +63,19 @@ spec-version: v1
 
 ## 4. Capabilities
 
-- [ ] **P0**: Maester config entries can declare a `state` field of `draft` or `canon`
+- [x] **P0**: Maester config entries can declare a `state` field of `draft` or `canon`
   - Each published-document entry in the maester config accepts an optional `state` field
   - Accepted values are exactly `draft` and `canon`; any other value fails config validation with a clear, actionable error
   - The state is interpreted as applying to every file matched by that entry's path or glob
   - The field is optional everywhere; entries without a state remain valid
 
-- [ ] **P0**: Citadel config entries for includes-driven sources can declare a per-entry `state` field
+- [x] **P0**: Citadel config entries for includes-driven sources can declare a per-entry `state` field
   - Each entry in a source's `includes` list accepts an optional `state` field of `draft` or `canon`
   - Includes that today are bare path strings remain valid; the enriched object form (`{ path, state }`) is the way to add a state
   - Validation rejects unknown state values with a clear error pointing at the offending source and entry
   - The feature works uniformly across manifest-driven and includes-driven sources — the only difference is where the rule is declared
 
-- [ ] **P0**: Files can declare their own state inline using format-specific conventions
+- [x] **P0**: Files can declare their own state inline using format-specific conventions
   - **Markdown**: a `state` field inside YAML frontmatter at the top of the file
   - **HTML**: a first-content HTML comment of the form `<!-- state: <value> -->`
   - **YAML / JSON**: a top-level `state` key with a string value
@@ -83,39 +83,39 @@ spec-version: v1
   - Values are validated as `draft` or `canon`; an inline value outside that set surfaces a per-file warning, is treated as if no inline state were declared, and falls through to rule/default resolution (it does not by itself fail the file or the source)
   - Absence of an inline state is not an error — it just means the file relies on rule resolution
 
-- [ ] **P0**: Resolution precedence is inline > rule > default
+- [x] **P0**: Resolution precedence is inline > rule > default
   - When a file has an inline state, that state is authoritative regardless of any matching maester-config or citadel-config rule
   - When a file has no inline state and exactly one rule matches, the rule's state is used
   - When neither applies, the file's resolved state is `draft`
   - The resolution decision for each file is deterministic and reproducible across runs
 
-- [ ] **P0**: At citadel import, every materialized file in a supported inline format carries the resolved state inline
+- [x] **P0**: At citadel import, every materialized file in a supported inline format carries the resolved state inline
   - On successful import of a markdown file, the destination copy contains a `state` field in frontmatter (added or updated to match the resolved value)
   - On successful import of an HTML/YAML/JSON/plain-text file, the destination copy contains the resolved state in that format's inline convention (added or updated)
   - When the source already contained the correct inline state, the destination content is byte-identical to the source for that aspect (no spurious diffs)
   - The write is scoped to the citadel's local destination; the original maester source file is never modified by this feature
 
-- [ ] **P0**: Files in formats without a supported inline pattern are materialized untagged
+- [x] **P0**: Files in formats without a supported inline pattern are materialized untagged
   - Binary assets, images, PDFs, and any file type outside the v1 inline-format list are materialized at the citadel destination without any state tag
   - The run does not fail and the file is not skipped — only its tagging is skipped
   - A future feature may add sidecar metadata for these formats; this PRD does not block on that
 
-- [ ] **P0**: State vocabulary is restricted to `draft` and `canon` everywhere
+- [x] **P0**: State vocabulary is restricted to `draft` and `canon` everywhere
   - Maester config validation and citadel config validation reject unknown state values with a clear, field-named error at parse time
   - Inline-tag parsing recognizes the same two-value vocabulary; out-of-vocabulary inline values surface a per-file warning and are treated as if no inline state were present (see precedence capability)
   - The schema marker in each config file leaves room to expand the vocabulary in a later spec version without breaking v1 consumers
 
-- [ ] **P1**: Sync output reports the per-source state breakdown
+- [x] **P1**: Sync output reports the per-source state breakdown
   - Each source's section of the sync summary includes counts of `canon`, `draft`, and `untagged` files materialized
   - The breakdown is shown in both human-readable mode and structured (`--json`) output
   - Untagged here means a supported-format file whose tagging step was skipped or an unsupported-format file (the categories are distinguishable in structured output)
 
-- [ ] **P1**: Verbose sync output names the source of truth for each file's resolved state
+- [x] **P1**: Verbose sync output names the source of truth for each file's resolved state
   - When verbose output is requested, each file is listed with its resolved state and the origin of that decision (`inline`, `rule`, or `default`)
   - The verbose listing is opt-in and does not appear in the default output
   - This is the diagnostic path for understanding unexpected state outcomes
 
-- [ ] **P2**: Sync warns when an inline state and a matching rule disagree
+- [x] **P2**: Sync warns when an inline state and a matching rule disagree
   - When a file carries an inline state and a rule would have produced a different state, the run still uses the inline value (precedence is fixed), but logs an informational warning naming the file and both values
   - The warning is informational only; it does not fail the file or the source
   - The warning can be silenced via output flags
