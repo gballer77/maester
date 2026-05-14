@@ -31,7 +31,7 @@ implementation-order: 2
 
 **In-scope:**
 - An "Initialize a citadel" entry in the `npx maester` top-level menu, sibling to the maester-configuration entry
-- Interactive walkthrough that gathers: confirmation to create a citadel, one or more source entries (name, git URL, ref, optional `includes` list, auth scheme, optional destination override, optional description and tags)
+- Interactive walkthrough that gathers: confirmation to create a citadel, one or more source entries (name, git URL, ref, optional `includes` list with a per-entry state choice — `draft`, `canon`, or "file header" to defer to inline state in the file — auth scheme, optional destination override, optional description and tags)
 - Writing a citadel configuration file at the repository root
 - Scaffolding/installing a local sync script in the repository so `maester sync` can be invoked later
 - Detecting an existing citadel and refusing to overwrite without explicit user direction

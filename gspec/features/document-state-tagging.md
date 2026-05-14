@@ -123,6 +123,7 @@ spec-version: v1
 ## 5. Dependencies
 
 - **Maester Configuration** ([maester-configuration.md](maester-configuration.md)) — Extends the maester config entry schema with an optional `state` field. The configuration walkthrough may prompt for state on each entry (UI nicety, not required for the feature).
+- **Citadel Initialization** ([citadel-initialization.md](citadel-initialization.md)) — When the user declares an explicit `includes` list during init, the walkthrough prompts per entry for a state choice of `draft`, `canon`, or "file header". `draft`/`canon` are written as the enriched `{ path, state }` form; "file header" keeps the bare-string form so inline state in each file (or the default `draft`) governs.
 - **Maester Sync** ([maester-sync.md](maester-sync.md)) — Performs the per-file state resolution at import and writes the resolved state into each materialized file in the citadel destination.
 - **Citadel Initialization** ([citadel-initialization.md](citadel-initialization.md)) — Extends the citadel config's `includes` entry schema to optionally accept an object form carrying `state`, alongside the existing bare-string form.
 

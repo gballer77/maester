@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-05-13
+
+### Added
+- **`maester init` per-entry state prompt** — when the user declares an explicit `includes` list during citadel initialization, the walkthrough now asks per entry for a state choice: `draft`, `canon`, or "file header" (defer to inline state in the file). `draft` / `canon` are persisted as the enriched `{ path, state }` object form in `citadel.yaml`; "file header" keeps the bare-string form so each file's own inline state (or the default `draft`) governs at sync time. Manifest-driven sources are unaffected.
+
 ## [0.1.0] - 2026-05-13
 
 ### Added

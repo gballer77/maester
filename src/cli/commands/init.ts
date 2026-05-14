@@ -14,7 +14,13 @@ import { runSkillInstall } from "../../core/skill/runner.js";
 import { listSkillTargets } from "../../core/skill/targets/index.js";
 import type { SkillTargetId } from "../../core/skill/types.js";
 import { SKILL_VERSION } from "../../core/skill/version.js";
-import { type AuthRef, DEFAULT_BASE_DIR, type Source } from "../../schemas/citadel.js";
+import type { State } from "../../core/state/schema.js";
+import {
+  type AuthRef,
+  DEFAULT_BASE_DIR,
+  type IncludeEntry,
+  type Source,
+} from "../../schemas/citadel.js";
 import { PromptCancelledError } from "../../ui/prompts.js";
 import type { CliContext } from "../context.js";
 
@@ -267,7 +273,7 @@ async function collectOneSource(
   return source;
 }
 
-async function collectIncludes(ctx: CliContext): Promise<string[]> {
+async function collectIncludes(ctx: CliContext): Promise<IncludeEntry[]> {
   const useExplicit = await ctx.prompts.confirm({
     message:
       "Declare an explicit `includes` list? (Skip to let the source's own maester.yaml manifest drive what gets pulled.)",
@@ -289,7 +295,34 @@ async function collectIncludes(ctx: CliContext): Promise<string[]> {
       return undefined;
     },
   });
-  return parseIncludesEntries(raw);
+
+  const paths = parseIncludesEntries(raw);
+  const entries: IncludeEntry[] = [];
+  for (const path of paths) {
+    const choice = await ctx.prompts.select<IncludesStateChoice>({
+      message: `State for '${path}'?`,
+      initialValue: "file-header",
+      options: [
+        { value: "draft", label: "draft", hint: "tag this entry as draft" },
+        { value: "canon", label: "canon", hint: "tag this entry as canon" },
+        {
+          value: "file-header",
+          label: "file header",
+          hint: "no rule; defer to inline state in each file",
+        },
+      ],
+    });
+    entries.push(buildIncludeEntry(path, choice));
+  }
+  return entries;
+}
+
+type IncludesStateChoice = "draft" | "canon" | "file-header";
+
+export function buildIncludeEntry(path: string, choice: IncludesStateChoice): IncludeEntry {
+  if (choice === "file-header") return path;
+  const state: State = choice;
+  return { path, state };
 }
 
 async function collectAuth(ctx: CliContext): Promise<AuthRef | undefined> {
