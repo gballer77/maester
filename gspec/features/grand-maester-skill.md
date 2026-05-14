@@ -79,7 +79,8 @@ spec-version: v1
   - The selection is presented in a way that makes the generic `AGENTS.md` option discoverable for agents not on the named list
 
 - [x] **P0**: Install writes the correct per-target artifacts into the citadel repository
-  - For each selected target, the install writes the integration artifact(s) at the path that target expects (e.g., a skill directory for Claude Code, a rules file for Cursor, an `AGENTS.md` file for Codex CLI / generic, etc.)
+  - For each selected target, the install writes the integration artifact(s) at the path that target expects — a named-skill directory for platforms that expose one (e.g., `.claude/skills/grand-maester/SKILL.md` for Claude Code, `.agents/skills/grand-maester/SKILL.md` for Codex CLI), a rules file for Cursor, and an `AGENTS.md` file for the generic fallback
+  - For named-skill targets, the artifact carries the frontmatter that target's platform requires for implicit / description-based invocation (e.g., `name` and `description` at minimum), so the host agent can discover and load the skill when the developer asks a citadel-relevant question rather than only when the user names it
   - Each artifact carries a clearly marked managed region so future upgrades can update its content without clobbering user-added content
   - Artifacts are safe to commit — they contain no secret values and no machine-local paths
   - The install reports the exact files written at the end of the run so the user can verify
@@ -124,10 +125,16 @@ spec-version: v1
   - The helper's output is stable enough to be consumed by an agent without retraining (versioned output shape)
   - The helper has no side effects on the citadel destination directories or provenance markers (read-only, like [Citadel Status](citadel-status.md))
 
+- [ ] **P0**: Codex CLI target installs as a named skill at the Codex skills directory
+  - The Codex target writes its artifact(s) under the Codex CLI project-skills convention (`.agents/skills/<skill-name>/` at the repository root, scanned from `$CWD` up to `$REPO_ROOT`) rather than mingling content into the catch-all root `AGENTS.md`
+  - The `SKILL.md` file carries YAML frontmatter with at least `name` and `description` fields, where the description is shaped for Codex's implicit-invocation matching (so Codex knows when the skill should trigger — e.g., citadel-relevant questions, pre-read freshness checks)
+  - Installing or upgrading the Codex target does not touch the user's root `AGENTS.md`
+  - Codex-installed artifacts encode the same citadel-, state-, and freshness-awareness as the other named-agent targets, in instruction form (Codex CLI does not currently support pre-read hooks, so the freshness check is encoded as instruction the host agent is told to follow)
+
 - [x] **P1**: Generic `AGENTS.md` target produces an agent-agnostic instruction file
   - The generic target writes (or updates) a single Markdown file at a conventional location in the citadel repository
   - The file's content encodes the same citadel-, state-, and freshness-awareness as the named-agent targets, in instruction-only form (no hook scripts)
-  - This is the fallback any agent platform that reads project-level instructions can use without per-platform support
+  - This is the fallback any agent platform that reads project-level instructions can use without per-platform support (and without its own named-skill surface — agents that do have one, such as Codex CLI, use their named-skill target instead)
 
 - [x] **P2**: User can install the Grand Maester non-interactively via flags
   - The standalone install accepts a flag-driven mode that specifies the target(s) without prompting (e.g., for CI bootstrapping or scripted setup)
@@ -148,7 +155,7 @@ spec-version: v1
 ## 6. Assumptions & Risks
 
 **Assumptions:**
-- Each named target agent in v1 (Claude Code, Codex CLI, Cursor) has a stable, documented integration surface for project-level instructions, and at least one of them (Claude Code) additionally supports hook-style runtime automation. The generic `AGENTS.md` target is a fallback for agents that read project instructions in a standard Markdown file.
+- Each named target agent in v1 (Claude Code, Codex CLI, Cursor) has a stable, documented integration surface for project-level instructions. At least two of them — Claude Code (via `.claude/skills/<name>/SKILL.md`) and Codex CLI (via `.agents/skills/<name>/SKILL.md`) — additionally support a named-skill mechanism with implicit invocation driven by a `SKILL.md` description field. Claude Code further supports hook-style runtime automation; Codex CLI does not currently expose a pre-tool hook, so its skill relies on the description to trigger and on instruction text for runtime behavior. The generic `AGENTS.md` target is a fallback for agents that read project instructions in a standard Markdown file but offer no named-skill surface.
 - The citadel base directory and per-source layout are stable enough that instruction text can reference them by convention rather than by introspection. Layout changes that would break the instructions are handled by upgrading installed artifacts via the standalone command.
 - Inline state from [Document State Tagging](document-state-tagging.md) is the primary, file-local signal an agent needs to apply the canon-over-draft policy. No external state index is required.
 - The citadel repository is the right place to commit the installed artifacts — they belong to the project, not the individual developer's machine.
