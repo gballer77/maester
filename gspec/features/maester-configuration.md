@@ -33,7 +33,7 @@ implementation-order: 3
 **In-scope:**
 - A "Configure this repo as a maester" entry in the `npx maester` top-level menu
 - Interactive walkthrough that collects one or more published-document entries
-- Each entry: a path (file or glob, relative to the repo root) plus optional metadata (description, category, tags)
+- Each entry: a path (file or glob, relative to the repo root), an optional `state` choice (`draft`, `canon`, or "file header" to defer to inline state in each file), plus optional metadata (description, category, tags)
 - Writing the maester configuration file at the repository root
 - Detecting an existing maester configuration and refusing to overwrite silently
 - Basic validation of paths (well-formed, repo-relative, no path-escape)

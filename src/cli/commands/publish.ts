@@ -11,9 +11,38 @@ import {
   validateDocumentPath,
   validateTags,
 } from "../../core/publish/validators.js";
+import type { State } from "../../core/state/schema.js";
 import type { PublishedDocument } from "../../schemas/maester.js";
 import { PromptCancelledError } from "../../ui/prompts.js";
 import type { CliContext } from "../context.js";
+
+type PublishedDocumentStateChoice = "draft" | "canon" | "file-header";
+
+export function buildPublishedDocumentStateField(
+  choice: PublishedDocumentStateChoice,
+): { state: State } | Record<string, never> {
+  if (choice === "file-header") return {};
+  return { state: choice };
+}
+
+async function askDocumentState(
+  ctx: CliContext,
+  path: string,
+): Promise<PublishedDocumentStateChoice> {
+  return ctx.prompts.select<PublishedDocumentStateChoice>({
+    message: `State for '${path}'?`,
+    initialValue: "file-header",
+    options: [
+      { value: "draft", label: "draft", hint: "tag this entry as draft" },
+      { value: "canon", label: "canon", hint: "tag this entry as canon" },
+      {
+        value: "file-header",
+        label: "file header",
+        hint: "no rule; defer to inline state in the file",
+      },
+    ],
+  });
+}
 
 export function registerPublish(program: Command, getContext: () => CliContext): void {
   program
@@ -45,7 +74,12 @@ export async function runPublish(ctx: CliContext): Promise<number> {
       initialValue: true,
     });
     if (useReadme) {
-      documents.push({ path: "README.md", category: "readme" });
+      const stateChoice = await askDocumentState(ctx, "README.md");
+      documents.push({
+        path: "README.md",
+        category: "readme",
+        ...buildPublishedDocumentStateField(stateChoice),
+      });
       ctx.prompts.log.success("Added README.md");
     }
   }
@@ -126,6 +160,8 @@ async function collectOneDocument(
     }
   }
 
+  const stateChoice = await askDocumentState(ctx, trimmed);
+
   const description = await ctx.prompts.text({
     message: "Description (optional)",
     placeholder: "",
@@ -156,6 +192,7 @@ async function collectOneDocument(
     ...(trimmedDesc ? { description: trimmedDesc } : {}),
     ...(trimmedCat ? { category: trimmedCat } : {}),
     ...(tags.length > 0 ? { tags } : {}),
+    ...buildPublishedDocumentStateField(stateChoice),
   };
   return doc;
 }

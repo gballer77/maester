@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-05-14
+
+### Added
+- **`maester publish` per-document state prompt** — the publish walkthrough now asks per published document for a state choice: `draft`, `canon`, or "file header" (defer to inline state in the file). `draft` / `canon` are persisted as a `state:` field on the document entry in `maester.yaml`; "file header" omits the field so each file's own inline state (or the default `draft`) governs at sync time. Covers both the README.md auto-add path and explicit per-document additions, mirroring the `maester init` prompt added in v0.2.0.
+
 ## [0.2.1] - 2026-05-14
 
 ### Fixed
