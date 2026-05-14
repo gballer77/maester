@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-05-14
+
+### Fixed
+- **npm publish provenance** — added `repository`, `bugs`, and `homepage` fields to `package.json` so sigstore provenance validation matches the GitHub repository URL. Without these, `npm publish --provenance` failed with `422 Unprocessable Entity` because `repository.url` defaulted to an empty string.
+
 ## [0.2.0] - 2026-05-14
 
 ### Added

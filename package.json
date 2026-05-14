@@ -1,6 +1,6 @@
 {
   "name": "baller-maester",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A Node CLI for aggregating documentation from many sources into one central knowledge home for developers and AI agents.",
   "type": "module",
   "engines": {
@@ -69,5 +69,13 @@
     "vitest": "^2.1.8"
   },
   "keywords": ["cli", "documentation", "aggregation", "git", "knowledge", "monorepo", "ai-context"],
-  "license": "MIT"
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gballer77/maester.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gballer77/maester/issues"
+  },
+  "homepage": "https://github.com/gballer77/maester#readme"
 }
