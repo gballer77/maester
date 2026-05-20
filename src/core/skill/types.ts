@@ -11,6 +11,13 @@ export type SkillInstallOutcome = {
   error?: string;
 };
 
+export type SkillMcpRegistrationOutcome = {
+  host: SkillTargetId;
+  filePath: string;
+  action: "written" | "unchanged" | "skipped" | "failed";
+  error?: string;
+};
+
 export type SkillInstallResult = {
   outcomes: SkillInstallOutcome[];
   counts: {
@@ -19,6 +26,12 @@ export type SkillInstallResult = {
     unchanged: number;
     failed: number;
   };
+  /**
+   * Per-host MCP server registration outcomes from the refresh step. Empty
+   * when no MCP-capable target is involved (e.g. install was scoped to
+   * `agents-md`) or when running an upgrade `--check`.
+   */
+  mcpRegistrations: SkillMcpRegistrationOutcome[];
 };
 
 export type SkillStatusOutcomeState = "up-to-date" | "outdated" | "not-installed";

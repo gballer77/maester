@@ -1,9 +1,12 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { __registerTestType } from "../../../src/core/connectors/registry.js";
 import {
   CitadelConfigSchema,
+  ConnectorBaseSchema,
   SourceSchema,
   normalizeIncludeEntry,
 } from "../../../src/schemas/citadel.js";
+import { TEST_CONNECTOR_TYPE_ID, testConnectorType } from "../../fixtures/connector-test-type.js";
 
 describe("SourceSchema", () => {
   it("accepts a minimal valid source", () => {
@@ -366,6 +369,115 @@ describe("CitadelConfigSchema", () => {
         { name: "other", url: "https://example.com/b.git", destination: "citadel/alpha" },
       ],
     });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe("ConnectorBaseSchema", () => {
+  it("accepts a minimal valid entry", () => {
+    const r = ConnectorBaseSchema.safeParse({ name: "x", type: "gitlab-issues" });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects an uppercase name", () => {
+    const r = ConnectorBaseSchema.safeParse({ name: "TeamGL", type: "gitlab-issues" });
+    expect(r.success).toBe(false);
+  });
+
+  it("accepts token auth with an env var name", () => {
+    const r = ConnectorBaseSchema.safeParse({
+      name: "x",
+      type: "gitlab-issues",
+      auth: { type: "token", envVar: "TEAM_GL_TOKEN" },
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects extra fields (strict)", () => {
+    const r = ConnectorBaseSchema.safeParse({
+      name: "x",
+      type: "gitlab-issues",
+      extra: "no",
+    });
+    expect(r.success).toBe(false);
+  });
+});
+
+describe("CitadelConfigSchema — connectors array", () => {
+  let dispose: () => void;
+  beforeEach(() => {
+    dispose = __registerTestType(testConnectorType);
+  });
+  afterEach(() => {
+    dispose();
+  });
+
+  it("accepts an empty/omitted connectors array", () => {
+    const result = CitadelConfigSchema.safeParse({
+      schemaVersion: 1,
+      sources: [{ name: "x", url: "https://example.com/r.git" }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("validates per-type config via the registered type's configSchema", () => {
+    const result = CitadelConfigSchema.safeParse({
+      schemaVersion: 1,
+      sources: [{ name: "x", url: "https://example.com/r.git" }],
+      connectors: [
+        {
+          name: "echoer",
+          type: TEST_CONNECTOR_TYPE_ID,
+          config: { prefix: 42 }, // wrong type
+        },
+      ],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const offending = result.error.issues.find(
+        (i) => i.path.join("/") === "connectors/0/config/prefix",
+      );
+      expect(offending).toBeDefined();
+    }
+  });
+
+  it("rejects a reference to an unknown connector type with a field-named error", () => {
+    const result = CitadelConfigSchema.safeParse({
+      schemaVersion: 1,
+      sources: [{ name: "x", url: "https://example.com/r.git" }],
+      connectors: [{ name: "y", type: "nonexistent-type" }],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const issue = result.error.issues.find((i) => i.path.join("/") === "connectors/0/type");
+      expect(issue?.message).toMatch(/unknown connector type/i);
+    }
+  });
+
+  it("rejects duplicate connector names", () => {
+    const result = CitadelConfigSchema.safeParse({
+      schemaVersion: 1,
+      sources: [{ name: "x", url: "https://example.com/r.git" }],
+      connectors: [
+        { name: "same", type: TEST_CONNECTOR_TYPE_ID, config: {} },
+        { name: "same", type: TEST_CONNECTOR_TYPE_ID, config: {} },
+      ],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const dup = result.error.issues.find((i) => i.path.join("/") === "connectors/1/name");
+      expect(dup?.message).toMatch(/duplicate connector name/i);
+    }
+  });
+
+  it("allows a connector name that shadows a source name (separate namespaces)", () => {
+    const result = CitadelConfigSchema.safeParse({
+      schemaVersion: 1,
+      sources: [{ name: "team-gl", url: "https://example.com/r.git" }],
+      connectors: [{ name: "team-gl", type: TEST_CONNECTOR_TYPE_ID, config: {} }],
+    });
+    // Schema-level: allowed. Cross-namespace collision is a UX warning at the
+    // CLI level (Gap 47), not a schema invariant.
     expect(result.success).toBe(true);
   });
 });

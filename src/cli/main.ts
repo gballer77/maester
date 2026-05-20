@@ -5,7 +5,9 @@ import { bannerForContext } from "../ui/components/banner.js";
 import { PromptCancelledError } from "../ui/prompts.js";
 import { createTheming } from "../ui/theme/index.js";
 import { readColumns } from "../ui/width.js";
+import { registerConnector } from "./commands/connector.js";
 import { registerInit, runInit } from "./commands/init.js";
+import { registerMcp } from "./commands/mcp.js";
 import { registerPublish, runPublish } from "./commands/publish.js";
 import { registerSkill } from "./commands/skill.js";
 import { registerStatus, runStatusCommand } from "./commands/status.js";
@@ -74,7 +76,9 @@ function buildProgram(): Command {
     .enablePositionalOptions(false)
     .allowExcessArguments(false);
 
+  registerConnector(program, () => buildContext(extractFlags(program.opts())));
   registerInit(program, () => buildContext(extractFlags(program.opts())));
+  registerMcp(program, () => buildContext(extractFlags(program.opts())));
   registerPublish(program, () => buildContext(extractFlags(program.opts())));
   registerSkill(program, () => buildContext(extractFlags(program.opts())));
   registerStatus(program, () => buildContext(extractFlags(program.opts())));

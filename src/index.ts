@@ -32,7 +32,36 @@ export type {
   SkillTargetId,
 } from "./core/skill/types.js";
 export { SKILL_VERSION } from "./core/skill/version.js";
-export type { CitadelConfig, Source, AuthRef } from "./schemas/citadel.js";
+export {
+  buildToolDescription,
+  findOperationByToolName,
+  invokeOperation,
+  listConnectorTools,
+} from "./core/connectors/dispatch.js";
+export {
+  hasConnectorType,
+  listConnectorTypes,
+  lookupConnectorType,
+  registerConnectorType,
+} from "./core/connectors/registry.js";
+export {
+  CONNECTOR_ERROR_CODES,
+  ENVELOPE_SCHEMA_VERSION,
+  defineConnectorOperation,
+} from "./core/connectors/types.js";
+export { ConnectorError } from "./core/connectors/errors.js";
+export type {
+  ConnectorContext,
+  ConnectorErrorCode,
+  ConnectorErrorPayload,
+  ConnectorFailureEnvelope,
+  ConnectorOperation,
+  ConnectorResultEnvelope,
+  ConnectorSuccessEnvelope,
+  ConnectorToolDescriptor,
+  ConnectorType,
+} from "./core/connectors/types.js";
+export type { CitadelConfig, Connector, Source, AuthRef } from "./schemas/citadel.js";
 export type { MaesterConfig, PublishedDocument } from "./schemas/maester.js";
 export {
   ConfigError,

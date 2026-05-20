@@ -247,6 +247,13 @@ function renderInstallResult(
   for (const outcome of result.outcomes) {
     renderInstallOutcome(ctx, outcome);
   }
+  for (const reg of result.mcpRegistrations) {
+    if (reg.action === "failed") {
+      ctx.logger.error(`MCP refresh failed for ${reg.host}${reg.error ? `: ${reg.error}` : ""}`);
+    } else if (reg.action !== "skipped") {
+      ctx.logger.success(`MCP entry ${reg.action} → ${reg.filePath}`);
+    }
+  }
   ctx.logger.blank();
   const action = mode === "add-target" ? "Added" : "Installed";
   const total = result.counts.installed + result.counts.upgraded + result.counts.unchanged;

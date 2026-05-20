@@ -1,3 +1,4 @@
+import { refreshMcpRegistrations } from "../mcp/registrations/index.js";
 import { dedupeTargets, getTarget, listSkillTargets } from "./targets/index.js";
 import type {
   SkillInstallOutcome,
@@ -7,6 +8,12 @@ import type {
   SkillTargetId,
 } from "./types.js";
 import { SKILL_VERSION } from "./version.js";
+
+const MCP_HOST_IDS: readonly SkillTargetId[] = ["claude-code", "cursor", "codex"];
+
+function selectMcpHosts(targetIds: readonly SkillTargetId[]): SkillTargetId[] {
+  return targetIds.filter((id): id is SkillTargetId => MCP_HOST_IDS.includes(id));
+}
 
 export type RunSkillInstallOpts = {
   targets: readonly SkillTargetId[];
@@ -47,7 +54,10 @@ export async function runSkillInstall(
       });
     }
   }
-  return { outcomes, counts: countOutcomes(outcomes) };
+  const mcpHosts = selectMcpHosts(opts.targets);
+  const mcpRegistrations =
+    mcpHosts.length > 0 ? await refreshMcpRegistrations(repoRoot, { scopeTo: mcpHosts }) : [];
+  return { outcomes, counts: countOutcomes(outcomes), mcpRegistrations };
 }
 
 export type RunSkillUpgradeOpts = {
@@ -61,7 +71,7 @@ export async function runSkillUpgrade(
 ): Promise<SkillInstallResult> {
   const installedGroups = await findInstalledGroups(repoRoot);
   if (installedGroups.length === 0) {
-    return { outcomes: [], counts: countOutcomes([]) };
+    return { outcomes: [], counts: countOutcomes([]), mcpRegistrations: [] };
   }
   const outcomes: SkillInstallOutcome[] = [];
   for (const group of installedGroups) {
@@ -104,7 +114,10 @@ export async function runSkillUpgrade(
       });
     }
   }
-  return { outcomes, counts: countOutcomes(outcomes) };
+  // Refresh MCP registrations for every installed MCP-capable host —
+  // upgrade can run after a connector was added between sessions.
+  const mcpRegistrations = opts.check === true ? [] : await refreshMcpRegistrations(repoRoot);
+  return { outcomes, counts: countOutcomes(outcomes), mcpRegistrations };
 }
 
 export async function runSkillStatus(repoRoot: string): Promise<SkillStatusResult> {

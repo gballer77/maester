@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { detectRoles } from "../../core/config/paths.js";
+import { listConnectorTypes } from "../../core/connectors/registry.js";
 import { detectDestinationCollisions, finalizeCitadel } from "../../core/init/finalize.js";
 import {
   validateBaseDir,
@@ -17,6 +18,7 @@ import { SKILL_VERSION } from "../../core/skill/version.js";
 import type { State } from "../../core/state/schema.js";
 import {
   type AuthRef,
+  type Connector,
   DEFAULT_BASE_DIR,
   type IncludeEntry,
   type Source,
@@ -86,8 +88,10 @@ export async function runInit(ctx: CliContext): Promise<number> {
       return 1;
     }
 
+    const connectors = await collectConnectors(ctx);
+
     const confirmWrite = await ctx.prompts.confirm({
-      message: `Write ${sources.length} source(s) to citadel.yaml?`,
+      message: `Write ${sources.length} source(s)${connectors.length > 0 ? ` and ${connectors.length} connector(s)` : ""} to citadel.yaml?`,
       initialValue: true,
     });
     if (!confirmWrite) {
@@ -98,6 +102,7 @@ export async function runInit(ctx: CliContext): Promise<number> {
     const result = await finalizeCitadel(ctx.repoRoot.path, {
       sources,
       ...(baseDir ? { baseDir } : {}),
+      ...(connectors.length > 0 ? { connectors } : {}),
     });
     ctx.prompts.log.success(`Wrote ${result.citadelPath}`);
     if (result.gitignoreAdded.length > 0) {
@@ -404,4 +409,25 @@ function parseTagsEntries(raw: string): string[] {
     .split(/[,\s]+/)
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
+}
+
+/**
+ * Collect connector entries during init (Gap 42 — connector-registration step
+ * sits between source registration and the Grand Maester offer). When no
+ * connector types are registered in this build, the loop short-circuits with
+ * an info log and returns an empty array. When concrete types land (e.g.
+ * GitLab Issues), each type's prompt sequence plugs in here.
+ */
+async function collectConnectors(ctx: CliContext): Promise<Connector[]> {
+  const types = listConnectorTypes();
+  if (types.length === 0) {
+    return [];
+  }
+  // Future: when a registered type exists, ask the user whether they want to
+  // register one or more connectors and dispatch to per-type prompt modules.
+  // The framework is in place but no concrete type ships in this run.
+  ctx.prompts.log.info(
+    `${types.length} connector type(s) available, but interactive registration during init is wired in a follow-on feature. Use \`maester connector add\` after init.`,
+  );
+  return [];
 }

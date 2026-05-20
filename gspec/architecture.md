@@ -34,7 +34,7 @@ This is a single-package, ESM-only Node.js library that ships a CLI binary. Ther
 | [Document State Tagging](features/document-state-tagging.md) | New `src/core/state/` cluster (`schema.ts`, `format.ts`, `markdown.ts`, `html.ts`, `yaml.ts`, `json.ts`, `plaintext.ts`, `applier.ts`). Schema additions: `state` field on `PublishedDocument`, enriched object form (`{ path, state }`) on `Source.includes`. The applier slots into `src/core/sync/runner.ts` between staging and atomic promote — every materialized file in a supported format carries its resolved state inline at the citadel destination. |
 | [Citadel Status](features/citadel-status.md) | `src/cli/commands/status.ts` (CLI binding) calling `src/core/status/runner.ts`, which calls `src/core/status/probe.ts` per source. The probe uses `git ls-remote` for the commit SHA and a one-blob partial-clone + sparse-checkout into an ephemeral temp dir for the remote `maester.yaml`. Reuses `src/core/config/loader.ts`, `src/core/auth/resolver.ts`, and `src/core/sync/provenance.ts` (read-only). Never writes to a destination, never mutates `.maester/cache/`, never rewrites a provenance marker. |
 | [Grand Maester Skill](features/grand-maester-skill.md) | New `src/core/skill/` cluster (`runner.ts`, per-agent target writers under `targets/`, the `managed-region.ts` convention, `version.ts`, `runtime.ts`, and templates under `templates/`) plus `src/cli/commands/skill.ts` for the `maester skill <verb>` group. The same install/upgrade orchestration is invoked from `src/cli/commands/init.ts` at the end of the citadel walkthrough when the user opts in. The PreToolUse hook on Claude Code is path-scoped to citadel reads and delegates to `maester skill runtime preread`, which reuses `src/core/status/runner.ts`. See §6.10. |
-| [Traveling Maesters](features/traveling-maesters.md) | New `src/core/connectors/` cluster (compile-time type registry + per-type implementations under `types/<type-id>/`, shared dispatch and error mapping) and `src/core/mcp/` cluster (stdio MCP server built on `@modelcontextprotocol/sdk` plus per-host config writers under `registrations/`). New CLI verbs `maester mcp` (runs the server, registered in `src/cli/commands/mcp.ts`) and `maester connector <add\|remove\|list\|<name> <op>>` (`src/cli/commands/connector.ts`, where the last form is the fallback dispatch for non-MCP hosts). Citadel schema in `src/schemas/citadel.ts` gains an optional `connectors` array; per-type config validation runs in a Zod `superRefine` that consults the registry. Init walkthrough adds a connector-registration step between source registration and the Grand Maester offer; standalone `maester connector add/remove` refresh installed per-host MCP registrations. Grand Maester install/upgrade writes the maester MCP server entry into each installed MCP-capable target's config alongside the existing skill artifacts. See §6.11. |
+| [Traveling Maesters](features/traveling-maesters.md) | New `src/core/connectors/` cluster (compile-time type registry + per-type implementations under `types/<type-id>/`, shared dispatch and error mapping) and `src/core/mcp/` cluster (stdio MCP server built on `@modelcontextprotocol/sdk` plus per-host config writers under `registrations/`). New CLI verbs `maester mcp` (runs the server, registered in `src/cli/commands/mcp.ts`) and `maester connector <add\|remove\|list\|exec>` (`src/cli/commands/connector.ts`, where `exec <name> <op>` is the fallback dispatch for non-MCP hosts). Citadel schema in `src/schemas/citadel.ts` gains an optional `connectors` array; per-type config validation runs in a Zod `superRefine` that consults the registry. Init walkthrough adds a connector-registration step between source registration and the Grand Maester offer; standalone `maester connector add/remove` refresh installed per-host MCP registrations. Grand Maester install/upgrade writes the maester MCP server entry into each installed MCP-capable target's config alongside the existing skill artifacts. See §6.11. |
 | [GitLab Issues Connector](features/gitlab-issues-connector.md) | New `src/core/connectors/types/gitlab-issues/` cluster: `schema.ts` (per-type config), `client.ts` (thin native-`fetch` facade over `/api/v4`), `operations.ts` (the two operation handlers — `list-issues`, `get-issue`), `output.ts` (issue-object shape + `dataSchema: 1` version), `errors.ts` (HTTP-status-to-error-code mapping). Registered with the connector type registry under identifier `gitlab-issues`. Pure leaf module — never imported by the framework directly; only the registry references it. See §6.12. |
 
 ---
@@ -57,7 +57,7 @@ maester/
 │   │   ├── main.ts                      # Commander setup, top-level dispatch, exit handling
 │   │   ├── menu.ts                      # `npx maester` interactive top-level menu
 │   │   └── commands/
-│   │       ├── connector.ts             # `maester connector <add|remove|list|<name> <op>>` (mgmt + fallback dispatch)
+│   │       ├── connector.ts             # `maester connector <add|remove|list|exec>` (mgmt + fallback dispatch via `exec <name> <op>`)
 │   │       ├── init.ts                  # Citadel initialization walkthrough
 │   │       ├── mcp.ts                   # `maester mcp` — runs the stdio MCP server in cwd
 │   │       ├── publish.ts               # Maester (publish manifest) walkthrough
@@ -481,7 +481,7 @@ The server registers handlers via the SDK's typed setters (`server.setRequestHan
 
 #### Connector envelope (shared between MCP results and the fallback CLI)
 
-Every connector operation — whether dispatched through MCP or through the fallback `maester connector <name> <op>` CLI — emits the same deterministic JSON envelope. From MCP, the envelope is the body of a single text content block; from the fallback CLI, it is the entire stdout payload.
+Every connector operation — whether dispatched through MCP or through the fallback `maester connector exec <name> <op>` CLI — emits the same deterministic JSON envelope. From MCP, the envelope is the body of a single text content block; from the fallback CLI, it is the entire stdout payload.
 
 ```jsonc
 // success
@@ -589,7 +589,7 @@ See §6 → CLI Command Surface.
 | `maester connector add` | Interactive registration flow for a new connector (type picker, name prompt, env-var prompt, per-type config prompts). Refuses to write when invoked outside a citadel-bearing repo (exit `2`). After the citadel.yaml edit, refreshes the per-host MCP registrations for every installed Grand Maester target (Gap 46). |
 | `maester connector remove <name>` | Deletes the named connector from `citadel.yaml` after a confirmation prompt and refreshes per-host MCP registrations. |
 | `maester connector list` | Prints the configured connectors with their resolved tool names and types. Human-readable; agents go through MCP. |
-| `maester connector <name> <op> [--key value]...` | **Fallback** dispatch surface for non-MCP agent hosts (the Generic `AGENTS.md` Grand Maester target). One process per call. Dispatches through the same `src/core/connectors/dispatch.ts` the MCP server uses; output is the §4 success/failure envelope on stdout; exit code `0`/`1`/`2` as documented. Named MCP-capable agents always invoke through MCP and never use this surface. |
+| `maester connector exec <name> <op> [--key value]...` | **Fallback** dispatch surface for non-MCP agent hosts (the Generic `AGENTS.md` Grand Maester target). One process per call. Dispatches through the same `src/core/connectors/dispatch.ts` the MCP server uses; output is the §4 success/failure envelope on stdout; exit code `0`/`1`/`2` as documented. Named MCP-capable agents always invoke through MCP and never use this surface. The `exec` verb (rather than bare positional `<name> <op>`) keeps Commander's subcommand resolver unambiguous alongside `add` / `remove` / `list` — see Gap 36. |
 | `maester --help` | Banner + figlet header + command list. |
 | `maester --version` | Banner + version string. |
 
@@ -1209,7 +1209,7 @@ Both helpers emit nothing on stdout when there is nothing to say; any logging go
 
 ### 6.11 Traveling Maesters (MCP framework)
 
-[Traveling Maesters](features/traveling-maesters.md) introduces a second mode of citadel entry — **connectors** — that surfaces live data from external services to AI agents through the **Model Context Protocol**. Maester ships a stdio-based MCP server (`maester mcp`) built on `@modelcontextprotocol/sdk` (Gap 34). The server reads `citadel.yaml` at startup, instantiates every configured connector via the compile-time type registry, and exposes each operation as an MCP tool. The same per-connector dispatch is also reachable through a P1 **fallback CLI** (`maester connector <name> <op>`) for non-MCP agent hosts (Gap 36); both surfaces emit the §4 envelope.
+[Traveling Maesters](features/traveling-maesters.md) introduces a second mode of citadel entry — **connectors** — that surfaces live data from external services to AI agents through the **Model Context Protocol**. Maester ships a stdio-based MCP server (`maester mcp`) built on `@modelcontextprotocol/sdk` (Gap 34). The server reads `citadel.yaml` at startup, instantiates every configured connector via the compile-time type registry, and exposes each operation as an MCP tool. The same per-connector dispatch is also reachable through a P1 **fallback CLI** (`maester connector exec <name> <op>`) for non-MCP agent hosts (Gap 36); both surfaces emit the §4 envelope.
 
 #### Type registry
 
@@ -2144,6 +2144,8 @@ Both writers are idempotent — running install twice against an up-to-date targ
 
 **Resolution.** (User-confirmed.) Ships in the v1 implementation cut alongside the MCP server. Both front-ends call `src/core/connectors/dispatch.ts.invokeOperation()` — same code, two surfaces. Cost is roughly +150 LOC and +1 Commander subcommand in `src/cli/commands/connector.ts`. The fallback is also the natural unit-test entrypoint for connector implementations independent of MCP plumbing, so we get test ergonomics for free.
 
+**Verb shape.** The PRD described the fallback as bare positional `maester connector <name> <op>`, but Commander v13's subcommand resolver cannot disambiguate that pattern from the sibling `add` / `remove` / `list` verbs (any first positional could be either a subcommand name or a connector name). The implementation ships an explicit verb — `maester connector exec <name> <op> [--key value]...` — keeping the parser deterministic at the cost of one extra token. The Generic `AGENTS.md` policy fragment (`src/core/skill/templates/content/connector-policy-fallback.md`) documents this form. Trailing `--key value` / `--key=value` pairs map to the operation's argument object; repeated keys become arrays.
+
 #### Gap 37 — MCP tool-name normalization rule
 
 **What's missing.** [Traveling Maesters](features/traveling-maesters.md) specifies `<connector_name>__<operation_name>` with "hyphens in either side converted to underscores for cross-host compatibility." The exact rule, allowed-character set, and validation point need to be pinned so MCP and the fallback CLI agree.
@@ -2217,7 +2219,7 @@ This puts per-type validation in the registry where the type owns it, while cita
 **Resolution.** Two new content fragments under `src/core/skill/templates/content/`:
 
 - `connector-policy.md` — composed into the managed regions of MCP-capable targets (Claude Code, Codex CLI, Cursor). Fixed wording per §6.11: live data, cite identifiers, point-in-time, watch freshness verdict, do not assume undocumented fields, names follow `<connector>__<operation>` convention.
-- `connector-policy-fallback.md` — composed into the Generic `AGENTS.md` target. Documents the fallback CLI surface with sample invocations; explains that the agent must shell out via `maester connector <name> <op>` because no MCP client is available.
+- `connector-policy-fallback.md` — composed into the Generic `AGENTS.md` target. Documents the fallback CLI surface with sample invocations; explains that the agent must shell out via `maester connector exec <name> <op>` because no MCP client is available.
 
 The skill installer enumerates **no connectors** in either artifact — MCP `tools/list` is the canonical surface. The Generic fallback paragraph references the configured tools by name only via examples drawn from `maester connector list` output; if no connectors are configured, the paragraph is suppressed.
 

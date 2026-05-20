@@ -1,4 +1,5 @@
 import CITADEL_AWARENESS from "../content/citadel-awareness.md";
+import CONNECTOR_POLICY from "../content/connector-policy.md";
 import FRESHNESS_AWARENESS from "../content/freshness-awareness.md";
 import STATE_AWARENESS from "../content/state-awareness.md";
 
@@ -17,6 +18,8 @@ export function renderCodexSkillBody(opts: { baseDir: string }): string {
     interpolate(STATE_AWARENESS, opts),
     "",
     interpolate(FRESHNESS_AWARENESS, opts),
+    "",
+    interpolate(CONNECTOR_POLICY, opts),
   ].join("\n");
 }
 

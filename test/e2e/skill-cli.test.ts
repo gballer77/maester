@@ -66,7 +66,7 @@ describe("CLI: maester skill", () => {
     expect(await fileExists(repo.resolve("AGENTS.md"))).toBe(false);
   });
 
-  it("install --target claude-code writes SKILL.md and settings.json maester block", async () => {
+  it("install --target claude-code writes SKILL.md, settings.json maester block, and .mcp.json", async () => {
     await writeCitadelYaml(repo);
     const result = await runCli(["skill", "install", "--target", "claude-code"], repo.path);
     expect(result.code).toBe(0);
@@ -76,6 +76,12 @@ describe("CLI: maester skill", () => {
       await fs.readFile(repo.resolve(".claude/settings.json"), "utf8"),
     ) as Record<string, unknown>;
     expect(settings.maester).toBeDefined();
+    // Phase 5: install refreshes the MCP server registration too.
+    expect(await fileExists(repo.resolve(".mcp.json"))).toBe(true);
+    const mcp = JSON.parse(await fs.readFile(repo.resolve(".mcp.json"), "utf8")) as {
+      mcpServers: { maester?: { command: string; args: string[] } };
+    };
+    expect(mcp.mcpServers.maester).toEqual({ command: "npx", args: ["maester", "mcp"] });
   });
 
   it("install with --json emits NDJSON outcomes and a summary line", async () => {

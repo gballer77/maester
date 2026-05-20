@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { z } from "zod";
+import { lookupConnectorType } from "../core/connectors/registry.js";
 import { StateSchema } from "../core/state/schema.js";
 
 export const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -92,6 +93,23 @@ export const SourceSchema = z
   })
   .strict();
 
+/**
+ * Per-connector entry in `CitadelConfig.connectors`. Per-type `config` payload
+ * is validated by the registered type's `configSchema` in `.superRefine` below.
+ */
+export const ConnectorBaseSchema = z
+  .object({
+    name: z
+      .string()
+      .min(1)
+      .regex(SLUG_RE, "name must be a kebab-case slug starting with a letter or digit"),
+    type: z.string().min(1),
+    auth: AuthRefSchema.optional(),
+    description: z.string().min(1).optional(),
+    config: z.unknown().optional(),
+  })
+  .strict();
+
 export const DEFAULT_BASE_DIR = "citadel";
 
 export function resolveBaseDir(config: { baseDir?: string }): string {
@@ -102,6 +120,7 @@ type ParsedCitadel = {
   schemaVersion: 1;
   baseDir?: string;
   sources: z.infer<typeof SourceSchema>[];
+  connectors?: z.infer<typeof ConnectorBaseSchema>[];
 };
 
 function applyCombinedInvariants(data: ParsedCitadel, ctx: z.RefinementCtx): void {
@@ -146,6 +165,44 @@ function applyCombinedInvariants(data: ParsedCitadel, ctx: z.RefinementCtx): voi
       destsSeen.set(resolved, { index: i, name: entry.name });
     }
   }
+
+  const connectorNames = new Map<string, number>();
+  const connectors = data.connectors ?? [];
+  for (let i = 0; i < connectors.length; i++) {
+    const entry = connectors[i];
+    if (!entry?.name) continue;
+
+    const priorIndex = connectorNames.get(entry.name);
+    if (priorIndex !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `duplicate connector name '${entry.name}' — also used by connectors[${priorIndex}]`,
+        path: ["connectors", i, "name"],
+      });
+    } else {
+      connectorNames.set(entry.name, i);
+    }
+
+    const type = lookupConnectorType(entry.type);
+    if (!type) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `unknown connector type '${entry.type}' for connector '${entry.name}'`,
+        path: ["connectors", i, "type"],
+      });
+      continue;
+    }
+
+    const configResult = type.configSchema.safeParse(entry.config ?? {});
+    if (!configResult.success) {
+      for (const issue of configResult.error.issues) {
+        ctx.addIssue({
+          ...issue,
+          path: ["connectors", i, "config", ...issue.path],
+        });
+      }
+    }
+  }
 }
 
 export const CitadelConfigSchema = z
@@ -157,6 +214,7 @@ export const CitadelConfigSchema = z
       .refine(isSafeRelativePath, "baseDir must be a repo-relative path with no '..' segments")
       .optional(),
     sources: z.array(SourceSchema).optional().default([]),
+    connectors: z.array(ConnectorBaseSchema).optional(),
   })
   .strict()
   .superRefine((data, ctx) => {
@@ -166,4 +224,5 @@ export const CitadelConfigSchema = z
 export type AuthRef = z.infer<typeof AuthRefSchema>;
 export type IncludeEntry = z.infer<typeof IncludeEntrySchema>;
 export type Source = z.infer<typeof SourceSchema>;
+export type Connector = z.infer<typeof ConnectorBaseSchema>;
 export type CitadelConfig = z.infer<typeof CitadelConfigSchema>;

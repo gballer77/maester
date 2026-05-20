@@ -32,6 +32,21 @@ describe("runSkillInstall", () => {
     expect(await fileExists(path.join(repoRoot, ".claude/skills/grand-maester/SKILL.md"))).toBe(
       true,
     );
+    // Phase 5: install refreshes the per-host MCP config too.
+    expect(await fileExists(path.join(repoRoot, ".mcp.json"))).toBe(true);
+    expect(result.mcpRegistrations).toHaveLength(1);
+    expect(result.mcpRegistrations[0]?.host).toBe("claude-code");
+  });
+
+  it("does not write any MCP config when only the agents-md target is installed", async () => {
+    const result = await runSkillInstall(repoRoot, {
+      targets: ["agents-md"],
+      mode: "install",
+      citadelBaseDir: "citadel",
+    });
+    expect(result.mcpRegistrations).toEqual([]);
+    expect(await fileExists(path.join(repoRoot, ".mcp.json"))).toBe(false);
+    expect(await fileExists(path.join(repoRoot, ".codex/config.toml"))).toBe(false);
   });
 
   it("writes codex and agents-md to separate artifacts", async () => {

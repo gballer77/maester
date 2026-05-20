@@ -117,66 +117,66 @@ spec-version: v1
 
 ## 4. Capabilities
 
-- [ ] **P0**: Citadel configuration declares a `connectors` array sibling to `sources`
+- [x] **P0**: Citadel configuration declares a `connectors` array sibling to `sources`
   - The citadel config schema accepts an optional `connectors` array; an empty or omitted array is valid and means "no connectors"
   - Each entry carries at minimum `name`, `type`, and an auth reference; entries may carry an optional `description` and a `config` object whose shape is owned by the per-type PRD
   - The config file's schema/version marker leaves room to evolve the `connectors` shape in later spec versions without breaking v1 consumers
   - Loading a citadel with connectors does not change the behavior of `maester sync` — sync operates over `sources` only
 
-- [ ] **P0**: Each connector references its auth credential by environment-variable name only
+- [x] **P0**: Each connector references its auth credential by environment-variable name only
   - The auth field stores the **name** of an environment variable expected to hold the credential at MCP-tool-invocation time, mirroring the source-side auth pattern from [Citadel Initialization](citadel-initialization.md)
   - No secret value is ever written to the citadel config by the framework or by the init / management walkthroughs
   - The same heuristic used for source-side auth — warn (do not accept) when the entered value looks like a token rather than an env-var name — is applied at every entry point that accepts the field
   - The committed citadel config is safe to share publicly even when private connectors are configured
 
-- [ ] **P0**: A `maester mcp` CLI subcommand runs a stdio-based MCP server for the current repository
+- [x] **P0**: A `maester mcp` CLI subcommand runs a stdio-based MCP server for the current repository
   - Invoked from a citadel-bearing directory, `maester mcp` starts an MCP server that speaks the MCP wire protocol over stdio (JSON-RPC frames on stdin/stdout)
   - The server reads `citadel.yaml` once at startup; an empty or missing `connectors` list yields an empty tool surface and the server still runs cleanly
   - The server exits cleanly when its stdio peer closes the channel; it never writes uninvited output to stdout that could corrupt the JSON-RPC stream (all diagnostics go to stderr)
   - Invoked from outside a citadel-bearing directory, the server exits non-zero with a clear stderr message
   - The server is launched by the host agent platform (Claude Code, Cursor, Codex CLI) per the MCP registrations the framework writes — not typically invoked directly by humans
 
-- [ ] **P0**: The MCP server exposes one tool per configured (connector, operation) pair with a deterministic naming convention
+- [x] **P0**: The MCP server exposes one tool per configured (connector, operation) pair with a deterministic naming convention
   - Tool name format: `<connector_name>__<operation_name>` with hyphens in either side converted to underscores for cross-host compatibility
   - Two different connectors of the same type produce two parallel sets of tools (e.g. `team_gl__list_issues` and `vendor_gl__list_issues`)
   - Each tool's `inputSchema` is a JSON Schema describing the operation's arguments — names, types, defaults, required vs. optional
   - Each tool's `description` is built dynamically from the connector entry's `description` (when set) plus the resolved per-type scope (e.g. "List issues from gitlab.acme.internal/team/project") so the agent can pick the right tool without re-asking the user
   - Tool descriptions are narrow and project-specific enough that off-task invocation is unlikely in practice (the framework relies on this as the primary scoping mechanism — see Use Case 6)
 
-- [ ] **P0**: Connector tool results follow a documented, machine-readable shape
+- [x] **P0**: Connector tool results follow a documented, machine-readable shape
   - Success: a single `text` content block whose body is JSON-encoded per the operation's data shape; the JSON includes a per-type `dataSchema` version field so the agent can decode future shape evolutions
   - Failure: an MCP tool error response (`isError: true`) with a single `text` content block containing a JSON-encoded error object — `code` drawn from a documented set, `message`, optional `details`
   - The success and failure shapes share a top-level schema version so a single decoder reads either
   - The framework-level error-code set is bounded and stable: `missing-env-var`, `connector-not-found`, `unknown-operation`, `auth-failed`, `remote-error`, `invalid-argument`, `internal-error`
   - Per-type errors that do not fit a framework code map to `remote-error` with the per-type detail in the `details` field
 
-- [ ] **P0**: Connector types are first-class and validated at config-load time
+- [x] **P0**: Connector types are first-class and validated at config-load time
   - The framework maintains a compile-time registry of supported connector types; each entry maps a type identifier to a config-schema validator and an operation handler set
   - Loading a citadel config that references an unknown `type` fails validation with a clear, field-named error pointing at the offending entry
   - The validator for a registered type rejects malformed per-type config at config-load time, not at first MCP-tool invocation
   - Adding a new connector type is purely additive to the registry and does not require changes to the MCP server's wire protocol or the framework's error model
 
-- [ ] **P0**: Missing or empty auth env var produces a clear, dedicated error inside the MCP response
+- [x] **P0**: Missing or empty auth env var produces a clear, dedicated error inside the MCP response
   - When a tool invocation needs the auth credential and the named env var is unset or empty at the moment of the call, the MCP server returns the `missing-env-var` error response naming the variable that is missing
   - The error never echoes the variable's value (even partially) — only its name
   - Tools that legitimately do not need credentials succeed without the env var being set
   - The check happens before any network call so missing-credential failures are fast and free
 
-- [ ] **P0**: MCP server registrations are written into each supported host platform's project-level MCP config
+- [x] **P0**: MCP server registrations are written into each supported host platform's project-level MCP config
   - Per-host writers exist for at least: **Claude Code**, **Codex CLI**, and **Cursor** (the same three named-skill targets carried by [Grand Maester Skill](grand-maester-skill.md))
   - Each writer knows its host's documented file path and entry shape and writes a managed `maester` entry that points at `maester mcp` (or the equivalent invocation form, e.g. `npx maester mcp`)
   - Writers use a managed-region convention so user-authored MCP entries outside the maester block are preserved
   - Writers are idempotent — running registration twice produces byte-identical files
   - The Generic `AGENTS.md` target is **not** an MCP target (no MCP config to write); its installed artifact instead documents the fallback CLI surface (see the fallback-CLI capability below)
 
-- [ ] **P0**: Connectors can be registered during citadel initialization
+- [x] **P0**: Connectors can be registered during citadel initialization
   - The [Citadel Initialization](citadel-initialization.md) walkthrough offers an optional step to register one or more connectors, alongside the existing source-registration step
   - For each connector, the walkthrough collects the connector type, a unique name, the auth env-var name (when required), an optional description, and any per-type config the connector's PRD declares as required
   - The walkthrough rejects an unknown connector type and rejects a name that collides with an existing connector before continuing
   - When connectors are registered AND the user has accepted (or already installed) the Grand Maester skill for one or more MCP-capable targets, init writes the MCP server registration into those targets in the same pass
   - Skipping the connector step completes init normally with an empty `connectors` array and zero MCP registrations
 
-- [ ] **P0**: Grand Maester skill install/upgrade refreshes MCP server registrations and adds a connector-policy paragraph
+- [x] **P0**: Grand Maester skill install/upgrade refreshes MCP server registrations and adds a connector-policy paragraph
   - When the Grand Maester skill is installed (or upgraded) on an MCP-capable target in a citadel that has any connectors configured, the install also writes the maester MCP server registration into that target's MCP config
   - The skill's installed artifacts include a short, fixed policy paragraph about reasoning over connector tool output: live data, cite specifics, watch staleness verdict, treat output as point-in-time
   - The skill's installed artifacts deliberately do **not** enumerate configured connectors — MCP discovery is the source of truth for what tools are available
@@ -184,7 +184,7 @@ spec-version: v1
   - When no connectors are configured in the citadel, the MCP registration is still written (so the agent picks up future additions automatically); when no connectors are configured AND no MCP-capable targets are installed, no MCP-config files are written
   - The Generic `AGENTS.md` target additionally documents the fallback CLI surface in its installed artifact (see the fallback-CLI capability below)
 
-- [ ] **P0**: A standalone management surface adds, removes, and lists connectors after init and refreshes MCP registrations
+- [x] **P0**: A standalone management surface adds, removes, and lists connectors after init and refreshes MCP registrations
   - A CLI verb group (e.g. `maester connector add / remove / list`) operates on the citadel's existing config without re-running init
   - `add` reuses the same prompts and validation as the init-walkthrough step and refreshes MCP registrations for every installed MCP-capable target afterward
   - `remove` requires the target connector name, confirms before deleting the entry, and refreshes MCP registrations afterward
@@ -192,24 +192,24 @@ spec-version: v1
   - Running any verb outside a citadel-bearing directory exits with a clear error and a non-zero exit code
   - `add` / `remove` report to the user that they should restart their agent session to pick up the tool-surface change (host platforms typically restart MCP servers automatically when config changes, but the user-visible reminder makes it unambiguous)
 
-- [ ] **P1**: A fallback agent-shaped CLI surface (`maester connector <name> <operation> [...args]`) exists for non-MCP agent platforms
+- [x] **P1**: A fallback agent-shaped CLI surface (`maester connector <name> <operation> [...args]`) exists for non-MCP agent platforms
   - The verb dispatches the same per-connector code as the MCP server; one process per call
   - Output is JSON on stdout with a versioned envelope containing the same `data` (success) or `error` (failure) shape the MCP server returns inside its content blocks; exit code zero on success, non-zero on failure
   - Invoking an unknown connector name, an unknown operation, or a malformed argument returns the same framework error-code set used by the MCP path
   - The fallback is documented in the Generic `AGENTS.md` target's installed artifact as the way to invoke connectors for hosts that cannot speak MCP
   - The fallback is **not** the primary surface for any of the named MCP targets; their installed artifacts point at MCP tools, not at the fallback
 
-- [ ] **P1**: A non-interactive flag mode supports scripted connector registration
+- [x] **P1**: A non-interactive flag mode supports scripted connector registration
   - The standalone `add` verb accepts a flag-driven form (e.g. `--type <type> --name <name> --env-var <NAME> --config <inline-json>`) that bypasses prompts
   - Flag-driven add fails with a clear error and a non-zero exit code on validation failure
   - Interactive add remains the default when no flags are passed
 
-- [ ] **P1**: The MCP server validates the configured citadel.yaml at startup and surfaces validation failures cleanly
+- [x] **P1**: The MCP server validates the configured citadel.yaml at startup and surfaces validation failures cleanly
   - A malformed `citadel.yaml`, a connector entry that references an unknown `type`, or a per-type config that fails its validator causes the server to exit non-zero with a clear stderr error before any MCP frames are exchanged
   - The host platform surfaces the error to the developer (most platforms log the spawn failure) so the developer can fix the config and restart
   - Partial successes are **not** allowed — the server either exposes the full validated set of tools or it does not start
 
-- [ ] **P2**: Connector names that collide with existing source names warn (do not reject)
+- [x] **P2**: Connector names that collide with existing source names warn (do not reject)
   - The management commands warn — do not reject — when a connector name shadows a source name, since the two live in separate namespaces but reading the config can confuse a future maintainer
   - The warning is informational; the entry is still added
 
