@@ -27,8 +27,8 @@ export function getTarget(id: SkillTargetId): SkillTarget {
 
 /**
  * Group a selection of targets by their writer so multiple ids that share an
- * output (e.g. `codex` + `agents-md` both write `AGENTS.md`) trigger a single
- * write call. The returned tuples preserve every id label for reporting.
+ * output trigger a single write call. The returned tuples preserve every id
+ * label for reporting.
  */
 export type DedupedTargetGroup = {
   writerKey: string;

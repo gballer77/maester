@@ -58,7 +58,7 @@ export type SkillTarget = {
   readonly label: string;
   /** Repo-relative paths this target writes. */
   readonly artifactPaths: readonly string[];
-  /** Writers backing different ids may share an implementation (codex + agents-md). */
+  /** Writers backing different ids may share an implementation; ids with distinct writerKeys produce separate file artifacts. */
   readonly writerKey: string;
   write(input: SkillWriteInput): Promise<SkillWriteOutcome>;
   /** Read the installed version marker from disk, if any. */

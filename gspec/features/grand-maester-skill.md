@@ -125,7 +125,7 @@ spec-version: v1
   - The helper's output is stable enough to be consumed by an agent without retraining (versioned output shape)
   - The helper has no side effects on the citadel destination directories or provenance markers (read-only, like [Citadel Status](citadel-status.md))
 
-- [ ] **P0**: Codex CLI target installs as a named skill at the Codex skills directory
+- [x] **P0**: Codex CLI target installs as a named skill at the Codex skills directory
   - The Codex target writes its artifact(s) under the Codex CLI project-skills convention (`.agents/skills/<skill-name>/` at the repository root, scanned from `$CWD` up to `$REPO_ROOT`) rather than mingling content into the catch-all root `AGENTS.md`
   - The `SKILL.md` file carries YAML frontmatter with at least `name` and `description` fields, where the description is shaped for Codex's implicit-invocation matching (so Codex knows when the skill should trigger — e.g., citadel-relevant questions, pre-read freshness checks)
   - Installing or upgrading the Codex target does not touch the user's root `AGENTS.md`

@@ -25,12 +25,14 @@ describe("skill target registry", () => {
 });
 
 describe("dedupeTargets", () => {
-  it("collapses codex + generic into one writer group with both labels", () => {
+  it("keeps codex and agents-md in separate writer groups (distinct artifacts)", () => {
     const groups = dedupeTargets([getTarget("codex"), getTarget("agents-md")]);
-    expect(groups).toHaveLength(1);
-    expect(groups[0]?.ids).toEqual(["codex", "agents-md"]);
-    expect(groups[0]?.labels).toEqual(["Codex CLI", "Generic AGENTS.md"]);
-    expect(groups[0]?.artifactPaths).toEqual(["AGENTS.md"]);
+    expect(groups).toHaveLength(2);
+    const byKey = new Map(groups.map((g) => [g.writerKey, g] as const));
+    expect(byKey.get("codex")?.ids).toEqual(["codex"]);
+    expect(byKey.get("codex")?.artifactPaths).toEqual([".agents/skills/grand-maester/SKILL.md"]);
+    expect(byKey.get("agents-md")?.ids).toEqual(["agents-md"]);
+    expect(byKey.get("agents-md")?.artifactPaths).toEqual(["AGENTS.md"]);
   });
 
   it("keeps separate writers when their writerKey differs", () => {
@@ -40,15 +42,16 @@ describe("dedupeTargets", () => {
       getTarget("codex"),
     ]);
     expect(groups).toHaveLength(3);
-    expect(groups.map((g) => g.writerKey).sort()).toEqual(["agents-md", "claude-code", "cursor"]);
+    expect(groups.map((g) => g.writerKey).sort()).toEqual(["claude-code", "codex", "cursor"]);
   });
 
-  it("collapses all four targets into three writer groups (claude-code, cursor, agents-md)", () => {
+  it("keeps all four targets in four distinct writer groups", () => {
     const groups = dedupeTargets(listSkillTargets());
-    expect(groups).toHaveLength(3);
+    expect(groups).toHaveLength(4);
     const byKey = new Map(groups.map((g) => [g.writerKey, g] as const));
-    expect(byKey.get("agents-md")?.ids).toEqual(["codex", "agents-md"]);
     expect(byKey.get("claude-code")?.ids).toEqual(["claude-code"]);
+    expect(byKey.get("codex")?.ids).toEqual(["codex"]);
     expect(byKey.get("cursor")?.ids).toEqual(["cursor"]);
+    expect(byKey.get("agents-md")?.ids).toEqual(["agents-md"]);
   });
 });

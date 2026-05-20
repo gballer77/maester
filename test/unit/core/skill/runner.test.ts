@@ -34,7 +34,7 @@ describe("runSkillInstall", () => {
     );
   });
 
-  it("dedupes codex + agents-md into a single AGENTS.md write with two outcome rows", async () => {
+  it("writes codex and agents-md to separate artifacts", async () => {
     const result = await runSkillInstall(repoRoot, {
       targets: ["codex", "agents-md"],
       mode: "install",
@@ -42,9 +42,12 @@ describe("runSkillInstall", () => {
     });
     expect(result.outcomes).toHaveLength(2);
     expect(result.outcomes.map((o) => o.id).sort()).toEqual(["agents-md", "codex"]);
-    // Both rows share the same artifactPaths set
-    expect(result.outcomes[0]?.artifactPaths).toEqual(["AGENTS.md"]);
-    expect(result.outcomes[1]?.artifactPaths).toEqual(["AGENTS.md"]);
+    const byId = Object.fromEntries(result.outcomes.map((o) => [o.id, o]));
+    expect(byId.codex?.artifactPaths).toEqual([".agents/skills/grand-maester/SKILL.md"]);
+    expect(byId["agents-md"]?.artifactPaths).toEqual(["AGENTS.md"]);
+    expect(await fileExists(path.join(repoRoot, ".agents/skills/grand-maester/SKILL.md"))).toBe(
+      true,
+    );
     expect(await fileExists(path.join(repoRoot, "AGENTS.md"))).toBe(true);
   });
 
@@ -105,19 +108,19 @@ describe("runSkillStatus", () => {
     expect(byId["claude-code"]?.state).toBe("up-to-date");
     expect(byId.codex?.state).toBe("up-to-date");
     expect(byId.cursor?.state).toBe("not-installed");
-    // agents-md target shares the artifact with codex so it reports up-to-date too
-    expect(byId["agents-md"]?.state).toBe("up-to-date");
+    // agents-md writes its own artifact (AGENTS.md), so it remains not-installed
+    expect(byId["agents-md"]?.state).toBe("not-installed");
   });
 
   it("reports outdated when a target's installed marker differs from SKILL_VERSION", async () => {
-    // Write an AGENTS.md with a stale version marker by hand.
+    // Plant a stale AGENTS.md so agents-md reports as outdated.
     const stale =
       "# AGENTS.md\n\n<!-- maester:skill:begin v=0.0.1 -->\nold body\n<!-- maester:skill:end -->\n";
     await fs.writeFile(path.join(repoRoot, "AGENTS.md"), stale, "utf8");
     const result = await runSkillStatus(repoRoot);
-    const codex = result.outcomes.find((o) => o.id === "codex");
-    expect(codex?.state).toBe("outdated");
-    expect(codex?.installedVersion).toBe("0.0.1");
+    const agentsMd = result.outcomes.find((o) => o.id === "agents-md");
+    expect(agentsMd?.state).toBe("outdated");
+    expect(agentsMd?.installedVersion).toBe("0.0.1");
   });
 });
 
@@ -161,8 +164,8 @@ describe("runSkillUpgrade", () => {
     const reread = await fs.readFile(agentsPath, "utf8");
     expect(reread).toBe(stale);
     // Outcomes still report what would change
-    const codex = result.outcomes.find((o) => o.id === "codex");
-    expect(codex?.action).toBe("upgraded");
+    const agentsMd = result.outcomes.find((o) => o.id === "agents-md");
+    expect(agentsMd?.action).toBe("upgraded");
   });
 });
 

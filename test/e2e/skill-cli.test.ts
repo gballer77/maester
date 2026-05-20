@@ -40,16 +40,30 @@ afterEach(async () => {
 });
 
 describe("CLI: maester skill", () => {
-  it("install --target codex agents-md writes a single AGENTS.md", async () => {
+  it("install --target codex agents-md writes SKILL.md and AGENTS.md separately", async () => {
     await writeCitadelYaml(repo);
     const result = await runCli(
       ["skill", "install", "--target", "codex", "--target", "agents-md"],
       repo.path,
     );
     expect(result.code).toBe(0);
+    expect(await fileExists(repo.resolve(".agents/skills/grand-maester/SKILL.md"))).toBe(true);
     expect(await fileExists(repo.resolve("AGENTS.md"))).toBe(true);
     expect(result.stdout).toContain("Codex CLI");
     expect(result.stdout).toContain("Generic AGENTS.md");
+  });
+
+  it("install --target codex writes a Codex SKILL.md without touching AGENTS.md", async () => {
+    await writeCitadelYaml(repo);
+    const result = await runCli(["skill", "install", "--target", "codex"], repo.path);
+    expect(result.code).toBe(0);
+    const skillPath = repo.resolve(".agents/skills/grand-maester/SKILL.md");
+    expect(await fileExists(skillPath)).toBe(true);
+    const text = await fs.readFile(skillPath, "utf8");
+    expect(text).toContain("name: grand-maester");
+    expect(text).toContain("description:");
+    expect(text).toContain("<!-- maester:skill:begin v=");
+    expect(await fileExists(repo.resolve("AGENTS.md"))).toBe(false);
   });
 
   it("install --target claude-code writes SKILL.md and settings.json maester block", async () => {

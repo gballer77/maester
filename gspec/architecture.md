@@ -34,6 +34,8 @@ This is a single-package, ESM-only Node.js library that ships a CLI binary. Ther
 | [Document State Tagging](features/document-state-tagging.md) | New `src/core/state/` cluster (`schema.ts`, `format.ts`, `markdown.ts`, `html.ts`, `yaml.ts`, `json.ts`, `plaintext.ts`, `applier.ts`). Schema additions: `state` field on `PublishedDocument`, enriched object form (`{ path, state }`) on `Source.includes`. The applier slots into `src/core/sync/runner.ts` between staging and atomic promote — every materialized file in a supported format carries its resolved state inline at the citadel destination. |
 | [Citadel Status](features/citadel-status.md) | `src/cli/commands/status.ts` (CLI binding) calling `src/core/status/runner.ts`, which calls `src/core/status/probe.ts` per source. The probe uses `git ls-remote` for the commit SHA and a one-blob partial-clone + sparse-checkout into an ephemeral temp dir for the remote `maester.yaml`. Reuses `src/core/config/loader.ts`, `src/core/auth/resolver.ts`, and `src/core/sync/provenance.ts` (read-only). Never writes to a destination, never mutates `.maester/cache/`, never rewrites a provenance marker. |
 | [Grand Maester Skill](features/grand-maester-skill.md) | New `src/core/skill/` cluster (`runner.ts`, per-agent target writers under `targets/`, the `managed-region.ts` convention, `version.ts`, `runtime.ts`, and templates under `templates/`) plus `src/cli/commands/skill.ts` for the `maester skill <verb>` group. The same install/upgrade orchestration is invoked from `src/cli/commands/init.ts` at the end of the citadel walkthrough when the user opts in. The PreToolUse hook on Claude Code is path-scoped to citadel reads and delegates to `maester skill runtime preread`, which reuses `src/core/status/runner.ts`. See §6.10. |
+| [Traveling Maesters](features/traveling-maesters.md) | New `src/core/connectors/` cluster (compile-time type registry + per-type implementations under `types/<type-id>/`, shared dispatch and error mapping) and `src/core/mcp/` cluster (stdio MCP server built on `@modelcontextprotocol/sdk` plus per-host config writers under `registrations/`). New CLI verbs `maester mcp` (runs the server, registered in `src/cli/commands/mcp.ts`) and `maester connector <add\|remove\|list\|<name> <op>>` (`src/cli/commands/connector.ts`, where the last form is the fallback dispatch for non-MCP hosts). Citadel schema in `src/schemas/citadel.ts` gains an optional `connectors` array; per-type config validation runs in a Zod `superRefine` that consults the registry. Init walkthrough adds a connector-registration step between source registration and the Grand Maester offer; standalone `maester connector add/remove` refresh installed per-host MCP registrations. Grand Maester install/upgrade writes the maester MCP server entry into each installed MCP-capable target's config alongside the existing skill artifacts. See §6.11. |
+| [GitLab Issues Connector](features/gitlab-issues-connector.md) | New `src/core/connectors/types/gitlab-issues/` cluster: `schema.ts` (per-type config), `client.ts` (thin native-`fetch` facade over `/api/v4`), `operations.ts` (the two operation handlers — `list-issues`, `get-issue`), `output.ts` (issue-object shape + `dataSchema: 1` version), `errors.ts` (HTTP-status-to-error-code mapping). Registered with the connector type registry under identifier `gitlab-issues`. Pure leaf module — never imported by the framework directly; only the registry references it. See §6.12. |
 
 ---
 
@@ -55,7 +57,9 @@ maester/
 │   │   ├── main.ts                      # Commander setup, top-level dispatch, exit handling
 │   │   ├── menu.ts                      # `npx maester` interactive top-level menu
 │   │   └── commands/
+│   │       ├── connector.ts             # `maester connector <add|remove|list|<name> <op>>` (mgmt + fallback dispatch)
 │   │       ├── init.ts                  # Citadel initialization walkthrough
+│   │       ├── mcp.ts                   # `maester mcp` — runs the stdio MCP server in cwd
 │   │       ├── publish.ts               # Maester (publish manifest) walkthrough
 │   │       ├── skill.ts                 # `maester skill <verb>` group (install/upgrade/add-target/status/runtime)
 │   │       ├── status.ts                # Status check CLI binding (read-only)
@@ -65,6 +69,29 @@ maester/
 │   │   │   ├── loader.ts                # yaml.parse + zod.parse; structured errors
 │   │   │   ├── writer.ts                # Serialize to YAML; preserve comments on rewrite
 │   │   │   └── paths.ts                 # Locate citadel.yaml / maester.yaml at repo root
+│   │   ├── connectors/                  # Traveling Maesters framework + per-type implementations
+│   │   │   ├── registry.ts              # Compile-time type registry; type-id -> ConnectorType
+│   │   │   ├── dispatch.ts              # invokeOperation(connector, op, args) -> ResultEnvelope. Shared by MCP server + fallback CLI
+│   │   │   ├── envelope.ts              # Success/failure envelope builders + schema/dataSchema constants
+│   │   │   ├── errors.ts                # Framework error codes (missing-env-var, auth-failed, remote-error, …)
+│   │   │   ├── tool-name.ts             # Deterministic <connector>__<operation> normalization (kebab -> snake)
+│   │   │   ├── input-schema.ts          # zod-to-json-schema bridge for inputSchema generation
+│   │   │   └── types/
+│   │   │       └── gitlab-issues/       # First-party connector type — see §6.12
+│   │   │           ├── index.ts         # Exports the ConnectorType object (config schema, operations, describeTool)
+│   │   │           ├── schema.ts        # Per-type config (host, project, apiVersion)
+│   │   │           ├── client.ts        # Thin native-fetch facade over /api/v4
+│   │   │           ├── operations.ts    # list-issues + get-issue handlers
+│   │   │           ├── output.ts        # Issue object shape; dataSchema: 1
+│   │   │           └── errors.ts        # HTTP-status -> framework error-code mapping
+│   │   ├── mcp/                         # MCP server + per-host config registrations
+│   │   │   ├── server.ts                # @modelcontextprotocol/sdk Server setup, tools/list + tools/call wiring
+│   │   │   ├── transport.ts             # StdioServerTransport binding; stdout discipline for JSON-RPC
+│   │   │   └── registrations/           # Per-agent-host MCP config writers
+│   │   │       ├── index.ts             # Registry; iterates installed Grand Maester targets and dispatches
+│   │   │       ├── claude-code.ts       # .mcp.json at repo root (managed mcpServers.maester entry)
+│   │   │       ├── cursor.ts            # .cursor/mcp.json at repo root (same shape)
+│   │   │       └── codex.ts             # .codex/config.toml [mcp_servers.maester] block (TOML round-trip)
 │   │   ├── repo/
 │   │   │   ├── root.ts                  # Detect repo root (walk upward for .git/)
 │   │   │   └── gitignore.ts             # Idempotent append of missing entries
@@ -185,6 +212,10 @@ maester/
 | Skill installer | `src/core/skill/runner.ts` | Orchestrates install / upgrade / add-target across selected agent targets; deduplicates targets that share an output path; returns a per-target `SkillInstallOutcome`. |
 | Skill runtime helper | `src/core/skill/runtime.ts` | Backs `maester skill runtime preread` (the Claude Code PreToolUse hook entrypoint) and `maester skill runtime status-summary`. The pre-read helper reuses `runStatus()` from `src/core/status/runner.ts` to derive its verdict. |
 | Skill version | `src/core/skill/version.ts` | `SKILL_VERSION` constant (sourced from package.json at build time) plus a `readInstalledSkillVersion(target)` helper used by the upgrade subcommand. |
+| Connector type registry | `src/core/connectors/registry.ts` | Compile-time map of connector type identifier → `ConnectorType`. The only place that imports per-type modules; everything else in the framework consults the registry. |
+| Connector dispatch | `src/core/connectors/dispatch.ts` | `invokeOperation(connector, operation, args)` is the shared entry-point used by both the MCP server (`src/core/mcp/server.ts`) and the fallback CLI (`src/cli/commands/connector.ts`). Returns the documented success/failure envelope. |
+| MCP server | `src/core/mcp/server.ts` | Constructs the `@modelcontextprotocol/sdk` `Server`, registers `tools/list` and `tools/call` handlers built from the connector registry, and connects it via `StdioServerTransport`. Reads `citadel.yaml` once at startup. |
+| Per-host MCP registrations | `src/core/mcp/registrations/index.ts` | Iterates installed Grand Maester targets via `listSkillTargets()` and dispatches to each host's writer (claude-code.ts, cursor.ts, codex.ts). Idempotent + managed-region. |
 
 ---
 
@@ -197,15 +228,20 @@ There is no database. The application's "data model" is the set of YAML configur
 ```mermaid
 erDiagram
     CitadelConfig ||--o{ Source : "registers"
+    CitadelConfig ||--o{ Connector : "registers"
     Source ||--o| AuthRef : "uses"
     Source ||--o| Destination : "writes to"
     Destination ||--|| ProvenanceMarker : "contains"
+    Connector ||--o| AuthRef : "uses"
+    Connector ||--|| ConnectorType : "is of type"
+    ConnectorType ||--o{ ConnectorOperation : "exposes"
     MaesterConfig ||--o{ PublishedDocument : "declares"
 
     CitadelConfig {
         string schemaVersion "literal: 1"
         string baseDir "optional; default 'citadel'; repo-relative"
         Source[] sources "length >= 1"
+        Connector[] connectors "optional; default []"
     }
     Source {
         string name PK "unique within citadel"
@@ -247,6 +283,23 @@ erDiagram
         string category "optional"
         string[] tags "optional"
         enum state "draft, canon; optional"
+    }
+    Connector {
+        string name PK "unique within citadel.connectors"
+        string type "must reference a registered ConnectorType"
+        AuthRef auth "discriminated union; same shape as Source.auth"
+        string description "optional; prepended to MCP tool descriptions"
+        json config "per-type; validated by ConnectorType.configSchema"
+    }
+    ConnectorType {
+        string id PK "compile-time identifier (e.g. gitlab-issues)"
+        string label "human-readable target name in tools/list descriptions"
+        zod configSchema "validates Connector.config at citadel-load time"
+    }
+    ConnectorOperation {
+        string name "kebab-case (e.g. list-issues, get-issue)"
+        json inputSchema "JSON Schema for tool arguments"
+        function handler "(connector, resolvedConfig, args) -> ResultEnvelope"
     }
 ```
 
@@ -332,17 +385,148 @@ Written atomically as the last step of a successful per-source sync. Used by fut
 
 Introduced by: [Maester Configuration](features/maester-configuration.md). The `state` field is introduced by [Document State Tagging](features/document-state-tagging.md).
 
+#### Connector (item inside `CitadelConfig.connectors`)
+
+| Field | Type | Constraints |
+|---|---|---|
+| `name` | string | Required. Slug shape (same as `Source.name`): `^[a-z0-9][a-z0-9-]*$`. Unique within `CitadelConfig.connectors`. A name that collides with a `Source.name` warns (does not reject) — see Gap 11 and §6.11. |
+| `type` | string | Required. Must reference a registered `ConnectorType` (today: `gitlab-issues`). Validation runs in the citadel `.superRefine`; unknown types are rejected with a field-named error. |
+| `auth` | `AuthRef` | Optional; defaults to `{ type: "none" }`. Same discriminated union as `Source.auth`. Read by `src/core/auth/resolver.ts` at MCP-tool-invocation time, not at config-load time. |
+| `description` | string | Optional. Free text; prepended to the dynamically-built MCP tool descriptions for this connector's tools (see §6.11). |
+| `config` | object | Per-type. The citadel schema accepts `z.unknown()` for this field and the `.superRefine` validates it against the registered type's `configSchema` after the type lookup. Unknown fields inside per-type config are rejected by that schema (each per-type schema is `.strict()`). |
+
+Introduced by: [Traveling Maesters](features/traveling-maesters.md). Consumed by: `src/core/mcp/server.ts` (every configured connector becomes one or more MCP tools at startup), `src/core/connectors/dispatch.ts` (per-call dispatch from MCP or fallback CLI), and `src/core/mcp/registrations/*` (each writer learns from the citadel's connector list whether to write a `maester` entry for its host).
+
+#### ConnectorType (compile-time registry value)
+
+| Field | Type | Constraints |
+|---|---|---|
+| `id` | string | Required. Stable identifier, lowercase kebab-case. Used as the `type` value in citadel.yaml. |
+| `label` | string | Required. Short human-readable name (e.g., `"GitLab Issues"`) used in CLI confirmation prompts and in the type's default tool descriptions. |
+| `configSchema` | zod | Required. `.strict()` zod schema validating one connector entry's `config` object. |
+| `operations` | record | Required. Map of operation name (kebab-case) to `ConnectorOperation`. |
+| `describeTool` | function | Required. `(operation, resolvedConfig) => string` — returns the per-tool description used in `tools/list`. The connector entry's `description` (if set) is prepended to this by the framework, not by the type. |
+
+Not a persisted entity. Lives only in `src/core/connectors/registry.ts` at runtime. Adding a new type is a purely additive change to that file plus the corresponding `types/<id>/` module.
+
+#### ConnectorOperation (per-operation definition inside a `ConnectorType`)
+
+| Field | Type | Constraints |
+|---|---|---|
+| `name` | string | Required. Operation name, kebab-case (e.g., `list-issues`, `get-issue`). Becomes the right-hand side of the MCP tool name after normalization (see Gap 37). |
+| `argsSchema` | zod | Required. Validates the operation's args object. Converted to JSON Schema for MCP `inputSchema` via `zod-to-json-schema` at startup. |
+| `dataSchemaVersion` | integer | Required. The per-type `dataSchema` value embedded in success payloads. Increments only on incompatible per-operation shape changes. |
+| `handler` | function | Required. `(args, ctx) => Promise<EnvelopeBody>` — pure dispatch; receives validated args and a `ctx` containing the resolved per-type config + resolved auth token (or undefined). Returns either `{ data }` or throws a `ConnectorError` that the dispatcher maps onto an error envelope. |
+
+The MCP server and the fallback CLI never invoke handlers directly; both go through `src/core/connectors/dispatch.ts.invokeOperation()`, which catches `ConnectorError` and wraps every outcome in the documented envelope (see §4).
+
+#### GitLabIssuesConfig (the `config` payload for `type: gitlab-issues`)
+
+| Field | Type | Constraints |
+|---|---|---|
+| `host` | string URL | Optional. Default `https://gitlab.com`. HTTPS only (validation rejects `http://` and malformed values at config-load time). |
+| `project` | string | Required. Either a full URL-encoded path (`my-group/my-project`) or a numeric project ID. Validation: non-empty, no whitespace. Runtime interpretation: `^\d+$` → numeric project ID; otherwise URL-encode and use as a path (see Gap 45). |
+| `apiVersion` | integer | Optional. Reserved for forward compatibility; v1 always targets `/api/v4`. Default unset. |
+
+Introduced by: [GitLab Issues Connector](features/gitlab-issues-connector.md). Validated by `src/core/connectors/types/gitlab-issues/schema.ts`.
+
+#### IssueOutput (the `data` payload returned by `gitlab-issues` operations)
+
+| Field | Type | Constraints |
+|---|---|---|
+| `iid` | integer | Project-scoped issue identifier. |
+| `id` | integer | GitLab global issue id. |
+| `title` | string | |
+| `description` | string \| null | Echoed verbatim from GitLab; no truncation in v1. |
+| `state` | string | `"opened"` or `"closed"`. |
+| `labels` | string[] | |
+| `assignees` | array of `{ username, name }` | Empty array when no assignees. |
+| `milestone` | `{ title, state }` \| null | `null` when not set. |
+| `web_url` | string | |
+| `created_at` | string | ISO 8601 (echoed). |
+| `updated_at` | string | ISO 8601 (echoed). |
+| `closed_at` | string \| null | ISO 8601 (echoed) or `null`. |
+
+`list-issues` wraps an array of `IssueOutput` plus a `meta` block: `{ page, per_page, total_pages, total }` (the last two are `null` when GitLab omits the totals headers).
+
+The whole payload carries `dataSchema: 1`; the version increments only on incompatible changes.
+
 ### Relationship Notes
 
 - **No shared entities across roles.** A `CitadelConfig` and `MaesterConfig` can coexist in the same repo (both files at the root) but never reference each other inside the repo — the linkage happens *across* repos at sync time, when a citadel pulls a remote that itself has a `maester.yaml`.
 - **All source names share a single namespace.** Every entry in `CitadelConfig.sources` has a unique `name`, so the slug can safely be used as a directory name (`citadel/<name>/`), a CLI argument (`maester sync foo bar`), and a result-table key. The same is true of resolved destinations — two sources cannot claim the same target directory.
+- **Connector names live in a separate, parallel namespace.** Each `Connector.name` is unique within `CitadelConfig.connectors` and is the left-hand side of the MCP tool name (`<connector_name>__<operation>`). A connector name that collides with an existing source name is allowed (the namespaces are separate) but the management commands warn the user — reading the config can confuse a future maintainer (Gap 47).
+- **AuthRef is reused, not re-declared.** Both `Source.auth` and `Connector.auth` reference the same `AuthRef` discriminated union, the same `src/core/auth/resolver.ts` chokepoint, and the same env-var-name-only persistence discipline (§7). The only difference is the consumer: sync injects the token into a `simple-git` HTTPS URL, the connector dispatcher passes it to the per-type client (e.g., GitLab's `PRIVATE-TOKEN` header).
 - **Schema versioning.** Both the citadel schema and the maester (publish manifest) schema are at v1. The loader (`src/core/config/loader.ts`) reads `schemaVersion` first and rejects unknown versions with an error pointing at the upgrade path. The optional top-level `baseDir` is a backward-compatible additive field; configs that omit it continue to validate and behave identically.
 
 ---
 
 ## 4. API Design
 
-**Not applicable.** There is no network API. The application's interface to the outside world is the CLI command surface (described in §6) and the library export surface in `src/index.ts`. The library export shape:
+The application has no network API to authenticate or rate-limit. There are three structured interfaces, in increasing distance from the package: the **MCP wire protocol** (the canonical agent-facing API in v1), the **library export surface** (for programmatic Node consumers), and the **CLI command surface** (described in §6).
+
+### MCP wire protocol (canonical agent-facing API)
+
+`maester mcp` runs a stdio-based **MCP server** built on `@modelcontextprotocol/sdk` (see Gap 34). It speaks the Model Context Protocol as JSON-RPC frames on stdin/stdout and is the canonical surface for AI agents reaching the citadel's configured connectors (issue trackers, etc.). HTTP-based MCP transport is deferred.
+
+#### Methods supported
+
+| Method | Purpose |
+|---|---|
+| `initialize` | Standard MCP handshake. Server returns its protocol version and tool capabilities. |
+| `tools/list` | Returns one tool per (connector, operation) pair. Each tool carries `name` (`<connector>__<operation>`, normalized — see Gap 37), `description` (built dynamically from connector + type — see §6.11), and `inputSchema` (JSON Schema generated from the operation's zod `argsSchema` via `zod-to-json-schema` — see Gap 38). |
+| `tools/call` | Invokes the named tool with the supplied `arguments`. The handler is dispatched through `src/core/connectors/dispatch.ts.invokeOperation()` and the result is returned as a single text content block carrying the JSON envelope below. Tool-level failures are returned as `{ isError: true, content: [{ type: "text", text: <error envelope JSON> }] }`. |
+
+The server registers handlers via the SDK's typed setters (`server.setRequestHandler(...)`); we never frame JSON-RPC by hand. Diagnostics and warnings go to **stderr** — stdout is reserved exclusively for the SDK's wire frames (see Gap 41).
+
+#### Connector envelope (shared between MCP results and the fallback CLI)
+
+Every connector operation — whether dispatched through MCP or through the fallback `maester connector <name> <op>` CLI — emits the same deterministic JSON envelope. From MCP, the envelope is the body of a single text content block; from the fallback CLI, it is the entire stdout payload.
+
+```jsonc
+// success
+{
+  "schema": 1,
+  "connector": "<name>",
+  "operation": "<op>",
+  "ok": true,
+  "data": {
+    "dataSchema": 1,
+    "...per-type payload..."
+  }
+}
+
+// failure
+{
+  "schema": 1,
+  "connector": "<name>",
+  "operation": "<op>",
+  "ok": false,
+  "error": {
+    "code": "auth-failed",
+    "message": "...",
+    "details": { "...": "..." }
+  }
+}
+```
+
+`schema` is the envelope version (today: `1`). `data.dataSchema` is the per-type payload version, independent of the envelope (today the GitLab payload is at `1`). The envelope shape is built in `src/core/connectors/envelope.ts` and is the single chokepoint — neither the MCP server nor the fallback CLI assembles it by hand.
+
+Documented `error.code` values (bounded set, treated as a stable interface — see Gap 44):
+
+| Code | Cause |
+|---|---|
+| `missing-env-var` | The connector's `auth.envVar` is unset or empty at invocation time. Returned before any network call. |
+| `connector-not-found` | The invocation referenced a connector name not in `citadel.yaml.connectors`. |
+| `unknown-operation` | The connector exists but does not expose the requested operation. |
+| `invalid-argument` | The operation's `argsSchema` rejected the supplied args (or an explicitly-rejected shape from the type's validator). |
+| `auth-failed` | The remote service returned an auth failure (e.g., HTTP 401/403). The env-var **name** appears in the message; the value never does. |
+| `remote-error` | The remote service returned a recognized non-auth failure (HTTP 404/429/5xx, transport, unexpected response shape). `details.kind` carries the sub-classification. |
+| `internal-error` | An unexpected exception inside the connector implementation. Treated as a bug; the dispatcher logs to stderr and returns this envelope rather than crashing the server. |
+
+Fallback CLI exit codes: `0` on success, `1` on any `ok: false` envelope, `2` for invocation-level errors (not in a citadel-bearing repo, malformed top-level args).
+
+### Library exports
 
 ```ts
 // src/index.ts
@@ -350,14 +534,26 @@ export { loadCitadelConfig, loadMaesterConfig } from "./core/config/loader.js";
 export { runSync } from "./core/sync/runner.js";
 export { runStatus } from "./core/status/runner.js";
 export { runSkillInstall, runSkillUpgrade, listSkillTargets } from "./core/skill/runner.js";
-export type { CitadelConfig, Source, AuthRef } from "./schemas/citadel.js";
+export { invokeOperation, listConnectorTools } from "./core/connectors/dispatch.js";
+export { CONNECTOR_TYPE_REGISTRY } from "./core/connectors/registry.js";
+export type { CitadelConfig, Source, Connector, AuthRef } from "./schemas/citadel.js";
 export type { MaesterConfig, PublishedDocument } from "./schemas/maester.js";
 export type { SyncResult, SyncOutcome } from "./core/sync/runner.js";
 export type { StatusResult, StatusOutcome, StatusVerdict, BehindReason } from "./core/status/runner.js";
 export type { SkillTargetId, SkillInstallResult, SkillInstallOutcome } from "./core/skill/runner.js";
+export type {
+  ConnectorType,
+  ConnectorOperation,
+  ConnectorResultEnvelope,
+  ConnectorErrorCode,
+} from "./core/connectors/types.js";
 ```
 
-Internal modules are not re-exported. Consumers of the library use only what is listed above; everything else is private.
+Internal modules — including `src/core/mcp/*` and `src/core/connectors/types/*` — are not re-exported. The MCP server is invoked through the CLI binary (`maester mcp`), not through the library; programmatic consumers reach connectors via `invokeOperation()`.
+
+### CLI surface
+
+See §6 → CLI Command Surface.
 
 ---
 
@@ -389,6 +585,11 @@ Internal modules are not re-exported. Consumers of the library use only what is 
 | `maester skill status` | List installed targets, their on-disk version markers, and whether each is up to date with `SKILL_VERSION`. |
 | `maester skill runtime preread` | Internal helper invoked by installed Claude Code hooks; reads a hook envelope from stdin, runs `maester status` when the targeted path is under the citadel base directory, emits a Claude Code `hookSpecificOutput.additionalContext` payload on stdout. Always exits `0`. |
 | `maester skill runtime status-summary` | Internal helper that prints a one-line summary derived from `runStatus()`. Exit-code ladder mirrors `maester status`. |
+| `maester mcp` | Runs the stdio MCP server for the current citadel-bearing repository. Reads `citadel.yaml`, instantiates configured connectors, and serves `tools/list` + `tools/call` over JSON-RPC frames on stdin/stdout. All non-protocol output (errors, warnings) goes to stderr. Intended to be spawned by an agent host's MCP client (Claude Code, Cursor, Codex CLI) per the registrations written by `maester connector add` / `maester skill install`. Exits non-zero with a stderr error when invoked outside a citadel-bearing repo or when `citadel.yaml` fails validation. See §6.11. |
+| `maester connector add` | Interactive registration flow for a new connector (type picker, name prompt, env-var prompt, per-type config prompts). Refuses to write when invoked outside a citadel-bearing repo (exit `2`). After the citadel.yaml edit, refreshes the per-host MCP registrations for every installed Grand Maester target (Gap 46). |
+| `maester connector remove <name>` | Deletes the named connector from `citadel.yaml` after a confirmation prompt and refreshes per-host MCP registrations. |
+| `maester connector list` | Prints the configured connectors with their resolved tool names and types. Human-readable; agents go through MCP. |
+| `maester connector <name> <op> [--key value]...` | **Fallback** dispatch surface for non-MCP agent hosts (the Generic `AGENTS.md` Grand Maester target). One process per call. Dispatches through the same `src/core/connectors/dispatch.ts` the MCP server uses; output is the §4 success/failure envelope on stdout; exit code `0`/`1`/`2` as documented. Named MCP-capable agents always invoke through MCP and never use this surface. |
 | `maester --help` | Banner + figlet header + command list. |
 | `maester --version` | Banner + version string. |
 
@@ -445,6 +646,14 @@ Each domain operation is a pure function (or a closely-related set of functions)
 | Skill target writer | `src/core/skill/targets/*.ts` | Per-agent module exposing `{ id, label, defaultArtifactPath, write(input) }`. The Claude Code writer additionally manages the `.claude/settings.json` hook entry under the dedicated `maester` top-level key. Idempotent — running the writer twice produces byte-identical output. |
 | Skill runtime helper | `src/core/skill/runtime.ts` | `preread(stdinPayload)` returns the Claude Code hook response envelope; calls `runStatus()` only when the targeted path resolves under the citadel `baseDir`; debounces via a small cache file at `.maester/.skill-cache.json`. `statusSummary()` returns a one-line human summary plus an exit-code recommendation. |
 | Managed region | `src/core/skill/managed-region.ts` | Format-specific begin/end marker conventions: HTML comments for Markdown / `.mdc`, a dedicated top-level `maester` key for `.claude/settings.json`. The reader extracts the embedded version; the writer rewrites only what is inside the markers. |
+| Connector registry | `src/core/connectors/registry.ts` | Compile-time map from connector type id (e.g. `"gitlab-issues"`) to its `ConnectorType` object (label, config schema, operations, `describeTool`). The only module that imports per-type implementations; everything else consults the registry. Loaded once at process start. |
+| Connector dispatch | `src/core/connectors/dispatch.ts` | `invokeOperation(connector, operation, args, env)` — single chokepoint reused by `src/core/mcp/server.ts` and `src/cli/commands/connector.ts`. Validates args via the operation's `argsSchema`, resolves the auth env var, calls the handler, wraps every outcome in the §4 envelope. Never throws — connector implementation exceptions become `internal-error` envelopes. |
+| Connector envelope | `src/core/connectors/envelope.ts` | Builders + constants for the §4 success/failure envelope. Single chokepoint so MCP and the fallback CLI never assemble the shape ad-hoc. |
+| Connector tool-name normalizer | `src/core/connectors/tool-name.ts` | `toolName(connector, operation)` returns the `<connector>__<operation>` form with kebab-case parts converted to snake_case (Gap 37). Used by both `src/core/mcp/server.ts` (when registering tools) and `src/cli/commands/connector.ts` (for the `connector list` output to show the same names the agent sees). |
+| Connector input-schema bridge | `src/core/connectors/input-schema.ts` | Wraps `zod-to-json-schema` to convert each operation's `argsSchema` into the JSON Schema MCP's `inputSchema` field expects. Pinned configuration (no `$defs`, no `$ref`) for maximum cross-host compatibility. |
+| MCP server | `src/core/mcp/server.ts` | Constructs the `@modelcontextprotocol/sdk` `Server`, registers `tools/list` and `tools/call` handlers built from the connector registry + configured connectors, connects via `StdioServerTransport`. Reads `citadel.yaml` once at startup; validation failures cause a non-zero exit before any frames are exchanged. |
+| MCP transport binding | `src/core/mcp/transport.ts` | Sets up `StdioServerTransport`, installs the stderr-only redirect for `consola` so stdout stays clean for JSON-RPC frames (Gap 41), and hooks the process to exit cleanly when stdio closes. |
+| MCP per-host registrations | `src/core/mcp/registrations/index.ts` | `refreshMcpRegistrations(repoRoot)` iterates installed Grand Maester targets via `listSkillTargets()`, dispatches to each host's writer (claude-code.ts, cursor.ts, codex.ts), and reports a per-target outcome. Idempotent; managed-region for each host's file format (Gap 39). Called by citadel-init (when relevant), `maester connector add/remove`, and `maester skill install/upgrade`. |
 | Gitignore | `src/core/repo/gitignore.ts` | Append missing entries to `.gitignore`; never reorder or rewrite. Returns the set of lines that were added. |
 
 ### 6.4 External Integrations
@@ -998,11 +1207,255 @@ Both helpers emit nothing on stdout when there is nothing to say; any logging go
 - It never installs the host agent. The user is responsible for having Claude Code, Codex CLI, or Cursor available; the installed artifacts have no effect on a machine without the corresponding agent.
 - It never gates tool calls or blocks reads. Even on Claude Code, the hook is informational — exit `0` always.
 
+### 6.11 Traveling Maesters (MCP framework)
+
+[Traveling Maesters](features/traveling-maesters.md) introduces a second mode of citadel entry — **connectors** — that surfaces live data from external services to AI agents through the **Model Context Protocol**. Maester ships a stdio-based MCP server (`maester mcp`) built on `@modelcontextprotocol/sdk` (Gap 34). The server reads `citadel.yaml` at startup, instantiates every configured connector via the compile-time type registry, and exposes each operation as an MCP tool. The same per-connector dispatch is also reachable through a P1 **fallback CLI** (`maester connector <name> <op>`) for non-MCP agent hosts (Gap 36); both surfaces emit the §4 envelope.
+
+#### Type registry
+
+`src/core/connectors/registry.ts` is the only module in the framework that imports per-type implementations. Adding a new connector type is purely additive: a `types/<id>/index.ts` module exports a `ConnectorType`, and the registry's map gains one entry.
+
+```ts
+// src/core/connectors/registry.ts
+import { gitlabIssuesType } from "./types/gitlab-issues/index.js";
+
+export const CONNECTOR_TYPE_REGISTRY = {
+  "gitlab-issues": gitlabIssuesType,
+} as const satisfies Record<string, ConnectorType>;
+```
+
+Citadel-config validation (`src/schemas/citadel.ts`) consults this registry in a `.superRefine` to validate each `connectors[i].config` against the registered type's `configSchema` and to reject references to unknown types with a field-named error (Gap 40).
+
+#### Tool naming
+
+The MCP tool name for `(connector, operation)` is built by `src/core/connectors/tool-name.ts.toolName()`:
+
+```
+toolName({ name: "team-gl" }, { name: "list-issues" })
+  -> "team_gl__list_issues"
+```
+
+Rules (Gap 37): both halves are lowercased; every `-` becomes `_`; the two halves are joined with `__`; the result is validated against `^[a-z][a-z0-9_]*$` at registration time (a violation is a programmer error, not a config error). The same function is used by `maester connector list` so humans see the exact name the agent will see.
+
+#### Tool descriptions and input schema
+
+Each type owns a `describeTool(operation, resolvedConfig)` function that returns a per-tool description string (e.g., `"List GitLab issues for project my-group/my-project on gitlab.acme.internal..."`). The framework prepends the connector entry's `description` (if set) so a maintainer can add team-specific context — that composition is in `src/core/connectors/dispatch.ts.buildToolDescription()`, not in any per-type module.
+
+Each operation's `argsSchema` is a zod schema; `src/core/connectors/input-schema.ts` converts it to JSON Schema via `zod-to-json-schema` (Gap 38), pinned to a minimal subset (no `$defs`, no `$ref`) so every MCP host parses it the same way. This is the `inputSchema` field on every entry in `tools/list`.
+
+#### Dispatch (the single chokepoint)
+
+`src/core/connectors/dispatch.ts.invokeOperation(connector, operation, args, env)` is the only call path that runs a connector handler. Both the MCP server and the fallback CLI go through it:
+
+```mermaid
+sequenceDiagram
+    actor U as Developer
+    participant Host as Agent host (MCP client)
+    participant Server as src/core/mcp/server.ts
+    participant Disp as src/core/connectors/dispatch.ts
+    participant Auth as src/core/auth/resolver.ts
+    participant Type as types/<type>/operations.ts
+
+    U->>Host: "list open GitLab issues"
+    Host->>Server: tools/call { name: "team_gl__list_issues", arguments: {...} }
+    Server->>Disp: invokeOperation(connector, "list-issues", args)
+    Disp->>Disp: argsSchema.parse(args) → invalid-argument on failure
+    Disp->>Auth: resolveAuth(connector.auth, env) → missing-env-var on failure
+    Disp->>Type: handler({ config, token, args })
+    Type-->>Disp: { data } | throw ConnectorError
+    Disp-->>Server: { ok: true, data } | { ok: false, error }
+    Server-->>Host: tool result content block (envelope JSON) | isError + envelope JSON
+    Host-->>U: agent's answer
+```
+
+The dispatcher catches every error path and wraps it in the §4 envelope. Connector exceptions that do not derive from `ConnectorError` are caught, logged to stderr, and returned as `internal-error` envelopes (Gap 44). The server **never** crashes on a single failed tool call.
+
+The fallback CLI follows the same shape but with one process per call: `src/cli/commands/connector.ts` loads `citadel.yaml`, calls `invokeOperation()`, writes the envelope JSON to stdout, exits with the appropriate code.
+
+#### MCP server lifecycle
+
+```mermaid
+sequenceDiagram
+    participant Host as Agent host
+    participant CLI as src/cli/commands/mcp.ts
+    participant Boot as src/core/mcp/server.ts
+    participant Reg as src/core/connectors/registry.ts
+    participant SDK as @modelcontextprotocol/sdk
+
+    Host->>CLI: spawn `npx maester mcp` (per .mcp.json)
+    CLI->>Boot: bootMcpServer(repoRoot)
+    Boot->>Boot: loadCitadelConfig(repoRoot) → throw on invalid → exit 2
+    Boot->>Reg: lookupType(connector.type) for each connector → throw on unknown
+    Boot->>Boot: build tool list (name, description, inputSchema)
+    Boot->>SDK: new Server({ name: "maester", version }); register handlers
+    Boot->>SDK: server.connect(StdioServerTransport)
+    Note over Host,Boot: ──── handshake ────
+    Host->>SDK: initialize
+    SDK-->>Host: capabilities { tools: {} }
+    Host->>SDK: tools/list
+    SDK-->>Host: built tool list
+    loop For each developer question that triggers a tool
+        Host->>SDK: tools/call
+        SDK->>Boot: invokeOperation(...)
+        Boot-->>SDK: envelope content block
+        SDK-->>Host: result
+    end
+    Host->>SDK: close stdio
+    SDK-->>Boot: shutdown signal → exit 0
+```
+
+Lifecycle invariants (Gap 47):
+
+- The server reads `citadel.yaml` **once at startup**. Live reload is out of scope; mid-session connector changes require the host platform to restart the server (most hosts restart automatically when their MCP config file changes).
+- Validation is all-or-nothing: a malformed `citadel.yaml`, an unknown `type`, or a per-type config that fails its validator causes a non-zero exit **before** any MCP frames are exchanged. The server never exposes a partial tool surface.
+- Individual tool-call failures return envelopes; they never crash the server.
+- The process exits cleanly when its stdio peer closes the channel.
+
+#### Stdout discipline
+
+`stdout` belongs exclusively to the `@modelcontextprotocol/sdk` transport (Gap 41). `src/core/mcp/transport.ts` reconfigures the project's `consola` logger to write only to stderr before the SDK is constructed, so anything that uses the shared logger (config-load errors, connector-runtime warnings) lands on stderr where the host platform expects diagnostics. The `--json` mode and prompt layers are unconditionally disabled when `maester mcp` runs.
+
+#### Per-host MCP server registration
+
+`src/core/mcp/registrations/` writes the `maester` MCP server entry into each agent host's project-level config (Gap 39). One writer per host, dispatched by `index.ts` based on which Grand Maester targets are installed:
+
+| Host | File path | Entry shape |
+|---|---|---|
+| Claude Code | `<repo-root>/.mcp.json` | JSON. Managed `"maester"` key inside `mcpServers`: `{ "command": "npx", "args": ["maester", "mcp"] }`. The writer round-trips other `mcpServers` entries byte-for-byte. |
+| Cursor | `<repo-root>/.cursor/mcp.json` | Same JSON shape as Claude Code. Cursor adopted Anthropic's project-MCP convention. |
+| Codex CLI | `<repo-root>/.codex/config.toml` | TOML. Managed `[mcp_servers.maester]` block with `command = "npx"` and `args = ["maester", "mcp"]`. Round-tripped with `@iarna/toml` (added to the stack — Gap 39) so the writer preserves other tables. |
+
+Each writer uses the same managed-region discipline as the existing Grand Maester `.claude/settings.json` writer: a dedicated top-level key (or named TOML block) is read, mutated, and re-serialized, while every other top-level key is preserved byte-for-byte. Idempotent — running registration twice produces byte-identical files. The Generic `AGENTS.md` Grand Maester target is **not** an MCP host; its installed artifact instead documents the fallback CLI.
+
+#### Init walkthrough placement
+
+The citadel-init flow gains a single optional step between source registration and the Grand Maester offer (Gap 42):
+
+```
+  ✓  Sources configured (3 entries)
+
+  Register a traveling maester (connector)? (Y/n) ▸ n
+  
+  …continues to Grand Maester offer…
+```
+
+Accepting opens a sub-flow that loops:
+
+1. Pick a connector type (today: only `gitlab-issues`).
+2. Enter a unique connector name (validated against `Connector.name` slug rules and uniqueness within `connectors`).
+3. Optional description.
+4. Auth env-var name (validated for the same name-vs-value heuristic used by source auth in §7).
+5. Per-type config prompts (each type's module owns its prompt sequence).
+
+After the loop, when the user also accepts the Grand Maester offer for one or more MCP-capable targets, init writes the MCP server registration into each target's config file in the same pass. Skipping the connector step completes init normally with an empty `connectors` array.
+
+#### Grand Maester integration
+
+Grand Maester install/upgrade extends to:
+
+1. Write/refresh the MCP server registration for each MCP-capable target via `src/core/mcp/registrations/index.ts`.
+2. Compose a fixed **connector-policy paragraph** into each per-target shell's managed region (Gap 43). The paragraph is a content fragment at `src/core/skill/templates/content/connector-policy.md`:
+   > *"This citadel exposes one or more **traveling maesters** as MCP tools whose names begin with the connector slug (e.g. `team-gl__list-issues`). Their output is **live, point-in-time data** — cite specific identifiers (issue iids, ticket numbers) when surfacing it, do not treat it as a stable corpus, and flag the **freshness verdict** in your answer when it is not `up-to-date`. The tools' arguments and shapes are described in MCP `tools/list`; do not assume undocumented fields."*
+3. Skip enumeration entirely. The list of configured connectors is never written into the installed artifacts — MCP `tools/list` is the canonical surface (Gap 43).
+
+The Generic `AGENTS.md` target receives a parallel content fragment (`templates/content/connector-policy-fallback.md`) that documents the fallback CLI surface instead, with sample invocations.
+
+#### Refresh on connector mutations
+
+`maester connector add` and `maester connector remove` end by calling `refreshMcpRegistrations(repoRoot)` (Gap 46), which iterates installed Grand Maester targets and rewrites each host's managed MCP entry from the updated citadel config. The final stdout lists which hosts were updated and reminds the user that their next agent session will pick up the new tool surface.
+
+### 6.12 GitLab Issues Connector
+
+[GitLab Issues Connector](features/gitlab-issues-connector.md) is the v1 reference connector type. It lives entirely under `src/core/connectors/types/gitlab-issues/` and is registered with the framework as `gitlab-issues`.
+
+#### Module layout
+
+| File | Responsibility |
+|---|---|
+| `index.ts` | Exports `gitlabIssuesType: ConnectorType` — wires together schema, operations, `describeTool`. The only module the registry imports. |
+| `schema.ts` | Per-type config (`host`, `project`, `apiVersion`). `.strict()` zod schema. |
+| `client.ts` | Thin native-`fetch` facade over `${host}/api/v4/projects/:project/issues...` (Gap 35). Encodes the `project` path, sets the `PRIVATE-TOKEN` header, parses JSON, hands raw status + body back to the caller. ~150 LOC. Zero new runtime deps. |
+| `operations.ts` | The two operation handlers: `listIssues(args, ctx)` and `getIssue(args, ctx)`. Each calls `client.ts`, maps GitLab outcomes onto the framework error codes via `errors.ts`, and returns the success/data shape. |
+| `output.ts` | The `IssueOutput` shape, the list-result `meta` shape, and the per-type `dataSchema: 1` constant. Single chokepoint so output stays stable. |
+| `errors.ts` | `mapGitLabStatus(status, body) -> ConnectorError`. Maps 401/403→`auth-failed`, 404→`remote-error/not-found`, 429→`remote-error/rate-limited` (preserving any `Retry-After`), 5xx/transport→`remote-error/transport`, unexpected→`remote-error/unexpected` with a truncated `body` excerpt. |
+
+#### Project path/ID interpretation
+
+The `project` value is interpreted at the client level (Gap 45):
+
+```ts
+const segment = /^\d+$/.test(project)
+  ? project                              // numeric ID — passed verbatim
+  : encodeURIComponent(project);         // path — URL-encoded
+const url = `${host}/api/v4/projects/${segment}/issues`;
+```
+
+Validation runs at config-load time (`schema.ts`) — empty / whitespace values are rejected.
+
+#### Auth
+
+The connector entry's `auth.envVar` is read by `src/core/auth/resolver.ts` at the moment of each tool call (not at server startup), so token rotation is picked up on the next call within a single MCP session — subject to the host platform's process-environment caching, which typically means the next agent-session restart guarantees rotation pickup. The env-var **name** is the only thing that ever appears in error messages; the value never is.
+
+#### Tool descriptions
+
+`describeTool` reads the resolved config and renders a per-operation string. Examples for `name: "team-gl"`, `host: "https://gitlab.acme.internal"`, `project: "my-group/my-project"`:
+
+| Tool | Description |
+|---|---|
+| `team_gl__list_issues` | `"List GitLab issues for project my-group/my-project on gitlab.acme.internal. Supports filtering by state, labels, assignee, milestone, free-text search, and page/per_page pagination. Returns at most 100 issues per call."` |
+| `team_gl__get_issue` | `"Fetch a single GitLab issue from project my-group/my-project on gitlab.acme.internal by its project-scoped iid. Returns the issue's title, description, state, labels, assignees, milestone, timestamps, and web_url."` |
+
+If the connector entry carries a `description`, the framework prepends it: `"App team's GitLab. Use for customer-facing API questions. List GitLab issues for ..."`. This composition lives in `src/core/connectors/dispatch.ts`, not in the type module.
+
+#### Input schemas (excerpt)
+
+```ts
+// operations.ts (illustrative)
+const listIssuesArgsSchema = z
+  .object({
+    state: z.enum(["opened", "closed", "all"]).default("opened"),
+    labels: z.string().optional(),
+    assignee: z.string().optional(),
+    milestone: z.string().optional(),
+    search: z.string().optional(),
+    page: z.number().int().positive().default(1),
+    per_page: z.number().int().positive().max(100).default(20),
+  })
+  .strict();
+```
+
+The framework's `src/core/connectors/input-schema.ts` converts this to JSON Schema for `tools/list.inputSchema`. The `per_page` cap of 100 (GitLab's documented maximum) is enforced both by the zod schema (configured rejection) **and** by the client (defensive clamp with a `meta.clamped` flag in the result), per the PRD's "values above the cap clamp to 100" requirement.
+
+#### Pagination meta
+
+The list result wraps the issue array in:
+
+```jsonc
+{
+  "dataSchema": 1,
+  "issues": [/* IssueOutput[] */],
+  "meta": {
+    "page": 1,
+    "per_page": 20,
+    "total_pages": 7,    // null when GitLab omits the header
+    "total": 132,        // null when GitLab omits the header
+    "clamped": false     // true iff per_page was clamped to 100
+  }
+}
+```
+
+`null` is used (not omission) for the totals fields so the schema shape is stable across GitLab versions that do and do not return the totals headers.
+
 ---
 
 ## 7. Authentication & Authorization Architecture
 
-The application has no in-process authorization layer. It operates with the invoking user's filesystem permissions and the credentials their environment grants to outbound git operations. The *only* authentication surface is the auth attached to each `Source` — every source uses the same `AuthRef` discriminated union, the same env-var resolution path, and the same redaction rules, regardless of whether the source is manifest-driven or includes-driven, and regardless of whether the caller is `maester sync` (which materializes content) or `maester status` (which does not). Both commands route through `src/core/auth/resolver.ts`; the only difference is which git invocations the resolved token then guards (`clone` + `fetch` for sync, `ls-remote` + a one-blob sparse-checkout for status — see §6.9).
+The application has no in-process authorization layer. It operates with the invoking user's filesystem permissions and the credentials their environment grants to outbound operations. The authentication surface has **two** symmetric kinds of entry, both routed through the single `src/core/auth/resolver.ts` chokepoint and both using the same `AuthRef` discriminated union, the same env-var resolution path, and the same redaction rules:
+
+- **Sources** — every source uses the same `AuthRef`, regardless of whether the source is manifest-driven or includes-driven, and regardless of whether the caller is `maester sync` (which materializes content) or `maester status` (which does not). The resolved token is injected into the git operation that guards it (`clone` + `fetch` for sync, `ls-remote` + a one-blob sparse-checkout for status — see §6.9).
+- **Connectors** — every connector uses the same `AuthRef` shape, resolved at MCP-tool-invocation time (not at server startup). The resolved token is handed to the per-type client (e.g., the GitLab client's `PRIVATE-TOKEN` header) by `src/core/connectors/dispatch.ts` and is dropped after the call. A missing or empty env var produces the framework's `missing-env-var` envelope before any network call (§4 → §6.11); the env-var **name** appears in error messages, the **value** never does.
+
+Both kinds of entry obey the same secret-handling rules (§7 below). The remainder of this section describes those rules; they apply uniformly to sources and connectors.
 
 ### Auth modes
 
@@ -1059,7 +1512,8 @@ The citadel-init walkthrough enforces the "name, not value" rule with both copy 
 
 | Variable | Required | Purpose | Example |
 |---|---|---|---|
-| `<user-defined>` | Conditional | Each maester with `auth.type === "token"` requires the env var whose name appears in its config. Variable names are user-chosen; common form is `MAESTER_<NAME>_TOKEN`. | `MAESTER_DOCS_TOKEN=ghp_xxx` |
+| `<user-defined>` (source auth) | Conditional | Each source with `auth.type === "token"` requires the env var whose name appears in its config. Variable names are user-chosen; common form is `MAESTER_<NAME>_TOKEN`. | `MAESTER_DOCS_TOKEN=ghp_xxx` |
+| `<user-defined>` (connector auth) | Conditional | Each connector with `auth.type === "token"` requires the env var whose name appears in its config. Read by the MCP server at invocation time (and by the fallback CLI at process start). Common forms: `GITLAB_TOKEN`, `MAESTER_<CONNECTOR>_TOKEN`. | `GITLAB_TOKEN=glpat-xxx` |
 | `NO_COLOR` | No | Disables all ANSI color output. Standard convention. | `NO_COLOR=1` |
 | `FORCE_COLOR` | No | Forces color output. Standard convention. | `FORCE_COLOR=3` |
 | `COLORTERM` | No (auto) | Detected at startup to choose truecolor vs 256-color. | `COLORTERM=truecolor` |
@@ -1082,6 +1536,9 @@ The citadel-init walkthrough enforces the "name, not value" rule with both copy 
 | `<repo-root>/AGENTS.md` (managed region) | n/a (Markdown w/ managed-region markers) | Grand Maester skill installer (Codex CLI and/or generic targets) | Any host agent that reads project-level `AGENTS.md`. Committed; not gitignored. |
 | `<repo-root>/.cursor/rules/grand-maester.mdc` | n/a (Markdown w/ managed-region markers) | Grand Maester skill installer (Cursor target) | Cursor at runtime. Committed; not gitignored. |
 | `<repo-root>/.maester/.skill-cache.json` | n/a (small JSON cache) | Grand Maester runtime hook (Claude Code) | Same hook. Lives under `.maester/`, already covered by the line init appends to `.gitignore`. |
+| `<repo-root>/.mcp.json` (managed `mcpServers.maester` key only) | n/a (JSON w/ a managed key) | `maester connector add/remove` + Grand Maester install (Claude Code target) | Claude Code at session start (also picked up by Cursor on hosts that read this path). Committed; not gitignored. Writer round-trips other `mcpServers` entries byte-for-byte. |
+| `<repo-root>/.cursor/mcp.json` (managed `mcpServers.maester` key only) | n/a (JSON w/ a managed key) | `maester connector add/remove` + Grand Maester install (Cursor target) | Cursor at session start. Same shape as Claude Code's `.mcp.json`. Committed. |
+| `<repo-root>/.codex/config.toml` (managed `[mcp_servers.maester]` block only) | n/a (TOML w/ a managed block) | `maester connector add/remove` + Grand Maester install (Codex CLI target) | Codex CLI at session start. Round-tripped via `@iarna/toml` so other `[mcp_servers.<name>]` blocks are preserved. Committed. |
 | `<repo-root>/.gitignore` (append-only) | n/a | Citadel init + sync runner | git |
 
 ### Example `citadel.yaml`
@@ -1186,6 +1643,43 @@ sources:
       type: token
       envVar: VENDOR_API_TOKEN
     destination: vendor/api-spec
+
+# Optional. Traveling maesters (connectors) expose live external data — issue
+# trackers, ticket queues, chat — to AI agents as MCP tools served by
+# `maester mcp`. Each connector is one (type, name) tuple plus a per-type
+# `config` block. The env-var NAME of an auth credential is committed; the
+# VALUE lives in your shell / .env / CI secret manager and is read at
+# tool-invocation time. The agent host (Claude Code, Cursor, Codex CLI)
+# discovers connector tools via standard MCP discovery — no enumeration
+# needed in your agent instructions.
+#
+# Each connector exposes one MCP tool per operation, named
+# `<connector_name>__<operation_name>` with hyphens converted to underscores
+# (e.g. `team-gl` + `list-issues` -> `team_gl__list_issues`).
+#
+connectors:
+  # GitLab Issues on gitlab.com (default host).
+  - name: oss-gl
+    type: gitlab-issues
+    description: >
+      Public GitLab project for the OSS library we depend on.
+      Use when the user asks about upstream bugs or feature requests.
+    auth:
+      type: token
+      envVar: OSS_GITLAB_TOKEN
+    config:
+      project: my-org/my-public-project
+
+  # GitLab Issues on self-hosted GitLab Enterprise.
+  - name: team-gl
+    type: gitlab-issues
+    description: App team's GitLab. Use for customer-facing API questions.
+    auth:
+      type: token
+      envVar: GITLAB_TOKEN
+    config:
+      host: https://gitlab.acme.internal
+      project: app-team/customer-api
 ```
 
 ### Example `maester.yaml`
@@ -1248,7 +1742,7 @@ documents:
 
 | File | Purpose | Key non-default settings |
 |---|---|---|
-| `package.json` | Manifest. | `"type": "module"`, `"bin": { "maester": "bin/maester.mjs" }`, `"engines": { "node": ">=24" }`, `"sideEffects": false`. |
+| `package.json` | Manifest. | `"type": "module"`, `"bin": { "maester": "bin/maester.mjs" }`, `"engines": { "node": ">=24" }`, `"sideEffects": false`. New runtime deps added by the connector framework: `@modelcontextprotocol/sdk` (MCP server runtime — Gap 34), `zod-to-json-schema` (operation `argsSchema` → JSON Schema — Gap 38), `@iarna/toml` (round-trippable TOML for `.codex/config.toml` — Gap 39). No new transitive HTTP-client deps; the GitLab type uses Node 24's native `fetch` (Gap 35). |
 | `tsconfig.json` | TypeScript config. | `"target": "ES2023"`, `"module": "NodeNext"`, `"moduleResolution": "NodeNext"`, `"strict": true`, `"noUncheckedIndexedAccess": true`, `"exactOptionalPropertyTypes": true`, `"verbatimModuleSyntax": true`. |
 | `tsup.config.ts` | Build. | `entry: { index: "src/index.ts", "cli/main": "src/cli/main.ts" }`, `format: ["esm"]`, `dts: true`, `clean: true`, `target: "node24"`, `loader: { ".md": "text" }` (inlines `src/core/skill/templates/content/*.md` as raw string imports — see [Gap 30](#gap-30--skill-template-storage-hybrid-ts-shells--md-content)). |
 | `vitest.config.ts` | Tests. | Two project pools: `unit` (parallel) and `e2e` (sequential). `test.include: ["test/**/*.test.ts"]`. |
@@ -1626,6 +2120,160 @@ Both writers are idempotent — running install twice against an up-to-date targ
 
 4. **No secret leakage.** The `--json` redaction rules from §7 (no embedded tokens in URLs or error messages) apply identically to the runtime helpers — `additionalContext` is built from `StatusOutcome` fields that have already passed sync's redactor.
 
+#### Gap 34 — MCP server runtime (SDK choice)
+
+**What's missing.** [Traveling Maesters](features/traveling-maesters.md) specifies a stdio-based MCP server but does not name a library. Two viable approaches: the official `@modelcontextprotocol/sdk` TypeScript package, or a hand-rolled JSON-RPC implementation.
+
+**Why it matters.** The framework's wire-protocol behavior, capability negotiation, content-block schema, request-id handling, and protocol-version tracking all live in this layer. Choosing wrong forces either ~400-600 LOC we own and have to keep current with MCP revisions, or a dependency on an actively-evolving SDK whose API changes we'd have to track.
+
+**Resolution.** (User-confirmed.) Use `@modelcontextprotocol/sdk` from npm. Rationale: it matches the existing stack pattern of preferring vendor-owned SDKs at integration boundaries (compare `simple-git`, `zod`, `@clack/prompts`); MCP is young enough that the upstream maintainers are the right party to track protocol changes; the cost is a single direct dependency. The MCP layer lives at `src/core/mcp/server.ts` and is a thin adapter around the SDK's `Server` class plus `StdioServerTransport`. We never frame JSON-RPC by hand.
+
+#### Gap 35 — GitLab API HTTP client
+
+**What's missing.** [GitLab Issues Connector](features/gitlab-issues-connector.md) does not name a library for talking to the GitLab REST API.
+
+**Why it matters.** Choice ripples through dependency surface (`@gitbeaker/rest` adds ~250 KB transitive install), the error-mapping code, and the cost of future expansion to MRs / comments / pipelines.
+
+**Resolution.** (User-confirmed.) Use Node 24's global `fetch` directly, wrapped in a thin typed facade at `src/core/connectors/types/gitlab-issues/client.ts`. Rationale: matches [stack.md](stack.md) §11 ("Native to Node 24+") and [practices.md](practices.md) §6 ("Minimize dependencies"); two endpoints with documented field shapes is exactly the case the rule was written for; we own ~150-200 LOC of HTTP plumbing in exchange for zero new runtime deps and full control over the HTTP-status-to-error-code mapping in `errors.ts`. Revisit if scope grows to many endpoints or mutations.
+
+#### Gap 36 — Fallback CLI surface in v1
+
+**What's missing.** [Traveling Maesters](features/traveling-maesters.md) marks the `maester connector <name> <op>` CLI surface as P1 — a "fallback for non-MCP agent platforms." The PRD does not say whether v1 implementation ships it or defers it.
+
+**Why it matters.** Without the fallback, the Generic `AGENTS.md` Grand Maester target has no mechanism to invoke connectors, closing a door the framework PRD opened. With it, we maintain two front-ends over the same dispatch code.
+
+**Resolution.** (User-confirmed.) Ships in the v1 implementation cut alongside the MCP server. Both front-ends call `src/core/connectors/dispatch.ts.invokeOperation()` — same code, two surfaces. Cost is roughly +150 LOC and +1 Commander subcommand in `src/cli/commands/connector.ts`. The fallback is also the natural unit-test entrypoint for connector implementations independent of MCP plumbing, so we get test ergonomics for free.
+
+#### Gap 37 — MCP tool-name normalization rule
+
+**What's missing.** [Traveling Maesters](features/traveling-maesters.md) specifies `<connector_name>__<operation_name>` with "hyphens in either side converted to underscores for cross-host compatibility." The exact rule, allowed-character set, and validation point need to be pinned so MCP and the fallback CLI agree.
+
+**Why it matters.** A single tool can be referenced from `maester connector list` output (humans), the MCP `tools/list` response (agents), and an installed Grand Maester policy paragraph (instructional examples). All three must produce the same string for the same `(connector, operation)` pair.
+
+**Resolution.** The normalization is implemented in `src/core/connectors/tool-name.ts.toolName(connector, operation)`. Rule: lowercase both halves; replace every `-` with `_`; join with `__`; validate the result against `^[a-z][a-z0-9_]*$`. A violation is treated as a programmer error (a connector name or operation name that the schema would have rejected at config load, or a registry entry with a malformed operation name) and crashes the server with a clear stderr message before any MCP frames are exchanged. Both `src/core/mcp/server.ts` and `src/cli/commands/connector.ts list` consume the same function so the names match exactly.
+
+#### Gap 38 — Operation `inputSchema` generation
+
+**What's missing.** MCP's `tools/list` requires a JSON Schema `inputSchema` for each tool. The connector framework defines operation arguments via zod (`argsSchema`); converting them to JSON Schema by hand for every operation would be brittle.
+
+**Why it matters.** A drift between the zod schema (used for runtime arg validation) and the JSON Schema (used by the agent to construct calls) would let the agent pass arguments the connector rejects, or vice versa.
+
+**Resolution.** Add `zod-to-json-schema` as a direct runtime dependency. `src/core/connectors/input-schema.ts` is the only caller; it converts each operation's `argsSchema` once at server startup and caches the result. The bridge is configured to emit a minimal JSON Schema dialect — no `$defs`, no `$ref`, no `$schema` — so every MCP host parses it the same way. Re-using the zod schema for both validation and discovery guarantees they cannot drift.
+
+#### Gap 39 — Per-host MCP config file paths and formats
+
+**What's missing.** The framework PRD calls for writers that register the maester MCP server in each agent host's project-level MCP config but does not pin the file paths or content formats — those are owned by each host platform and are not uniform.
+
+**Why it matters.** Wrong paths or wrong shapes mean the agent never sees the tools.
+
+**Resolution.** One writer per host under `src/core/mcp/registrations/`:
+
+| Host | File path | Format | Entry |
+|---|---|---|---|
+| Claude Code | `<repo-root>/.mcp.json` | JSON | `{ "mcpServers": { "maester": { "command": "npx", "args": ["maester", "mcp"] } } }` |
+| Cursor | `<repo-root>/.cursor/mcp.json` | JSON | Same shape as Claude Code (Cursor adopted Anthropic's convention) |
+| Codex CLI | `<repo-root>/.codex/config.toml` | TOML | `[mcp_servers.maester]` block with `command = "npx"` and `args = ["maester", "mcp"]` |
+
+Each writer reads the existing file (when present) with a format-preserving parser, mutates only its managed key/block, and round-trips everything else byte-for-byte. JSON files use a key-order-preserving parser (the same one the Claude Code `settings.json` writer uses for the existing Grand Maester hook). TOML round-tripping requires `@iarna/toml` as a new direct runtime dependency — pinned at v2.x — chosen for its mature round-trip support and zero further deps. Writers are idempotent (running twice produces byte-identical output). The Generic `AGENTS.md` Grand Maester target is **not** an MCP host; its writer is not in this set.
+
+**Implementation note.** The Codex CLI path and TOML shape above match Codex's currently-documented project-level MCP convention; implementing the Codex writer requires verifying the documented schema at implementation time and, if it has shifted, updating this writer (the other two writers are unaffected). The framework is otherwise host-agnostic.
+
+#### Gap 40 — Connector entry schema in citadel.yaml
+
+**What's missing.** The citadel schema needs to accept `connectors` while still validating per-type `config` blocks. Without a clear chokepoint the validation could happen in three places (schema, loader, dispatcher) and drift.
+
+**Why it matters.** A misconfigured connector that passes the citadel schema but fails at first MCP tool call is a poor experience — the user sees the error long after they typed the config. Validation must happen at citadel-load time.
+
+**Resolution.** `src/schemas/citadel.ts` extends `CitadelConfigSchema` with an optional `connectors` array. Each entry is parsed against a base `ConnectorBaseSchema` (`{ name, type, auth?, description?, config }`) where `config` is `z.unknown()`. The citadel's existing `.superRefine` is extended to:
+
+1. Look up each `connectors[i].type` in `CONNECTOR_TYPE_REGISTRY` (imported from `src/core/connectors/registry.ts`). Unknown type → `addIssue` with the offending `path: ["connectors", i, "type"]`.
+2. Parse `connectors[i].config` against the registered type's `configSchema` (which is `.strict()`). Failure → `addIssue` per zod error with rewritten `path` so the citadel-level error message points at `["connectors", i, "config", ...]`.
+3. Assert each `connector.name` appears at most once in `connectors` (separate namespace from `sources` — see Gap 47).
+
+This puts per-type validation in the registry where the type owns it, while citadel-load remains the single point that surfaces the error. The schema-to-registry import direction is `schemas/ → core/connectors/registry.ts`, which is a one-way reference and the only such direction in the codebase.
+
+#### Gap 41 — MCP server stdout discipline
+
+**What's missing.** The MCP wire protocol owns stdout (every line is a JSON-RPC frame). The project's existing `consola` logger writes status output to stdout by default. Without a discipline, a stray log line corrupts the JSON-RPC stream and breaks the host platform's parser.
+
+**Why it matters.** This is the single most catastrophic class of bug an MCP server can introduce — and it's one a `console.log` snuck into a connector handler can cause.
+
+**Resolution.** `src/core/mcp/transport.ts` is the only module that boots the SDK; it reconfigures the shared `consola` logger to write **only to stderr** before constructing the `Server`. The prompt layer (`@clack/prompts`) is disabled unconditionally when `maester mcp` runs — there is no TTY to prompt on by definition. The `--json` flag is treated as a no-op in `mcp` mode (the structured surface is MCP itself). A unit test asserts that no module under `src/core/connectors/` or `src/core/mcp/` imports the bare `console` global. The CLI command `src/cli/commands/mcp.ts` is the only command file allowed to invoke the transport binding; other commands cannot accidentally enter MCP mode.
+
+#### Gap 42 — Init walkthrough connector-registration placement
+
+**What's missing.** The Citadel Initialization walkthrough has an established order — source registration, then Grand Maester offer. The framework PRD adds a connector-registration step but does not pin where it goes.
+
+**Why it matters.** The Grand Maester offer needs to know whether connectors are configured so it can write MCP server registrations in the same pass for any MCP-capable target the user installs. If the connector step comes after the Grand Maester offer, the user would have to re-run skill install to pick up new connectors.
+
+**Resolution.** The connector-registration step sits **between** source registration and the Grand Maester offer. The init flow becomes: detect role → source loop → connector loop (this feature) → Grand Maester offer (which now writes MCP registrations when relevant). Declining the connector loop completes init normally with an empty `connectors` array, and the Grand Maester install proceeds without writing MCP server entries. The `src/cli/commands/init.ts` flow registers the new prompt block at this position; the connector prompts themselves live in `src/core/connectors/types/<id>/prompts.ts` so each type owns its prompt sequence.
+
+#### Gap 43 — Grand Maester connector-policy paragraph
+
+**What's missing.** The framework PRD specifies that Grand Maester adds a "short policy paragraph" about reasoning over connector tool output but does not pin the content or its delivery into per-target shells.
+
+**Why it matters.** Without committed content, every implementation iteration could rewrite the paragraph and drift from the framework PRD's promise. Without a delivery mechanism, it competes for space in each per-target shell with the existing three behaviors.
+
+**Resolution.** Two new content fragments under `src/core/skill/templates/content/`:
+
+- `connector-policy.md` — composed into the managed regions of MCP-capable targets (Claude Code, Codex CLI, Cursor). Fixed wording per §6.11: live data, cite identifiers, point-in-time, watch freshness verdict, do not assume undocumented fields, names follow `<connector>__<operation>` convention.
+- `connector-policy-fallback.md` — composed into the Generic `AGENTS.md` target. Documents the fallback CLI surface with sample invocations; explains that the agent must shell out via `maester connector <name> <op>` because no MCP client is available.
+
+The skill installer enumerates **no connectors** in either artifact — MCP `tools/list` is the canonical surface. The Generic fallback paragraph references the configured tools by name only via examples drawn from `maester connector list` output; if no connectors are configured, the paragraph is suppressed.
+
+#### Gap 44 — Connector error envelope and code set
+
+**What's missing.** The framework PRD describes the envelope conceptually (success / failure, code set, message, details) but the architecture must pin the JSON keys, the bounded code set, and the chokepoint that builds it.
+
+**Why it matters.** Both the MCP path and the fallback CLI path emit the same envelope. If they assembled it independently, drift would let one client parse one path's output but not the other.
+
+**Resolution.** Single chokepoint at `src/core/connectors/envelope.ts`. Envelope shape (see §4):
+
+```jsonc
+{ "schema": 1, "connector": "...", "operation": "...", "ok": true,  "data":  { "dataSchema": <int>, ... } }
+{ "schema": 1, "connector": "...", "operation": "...", "ok": false, "error": { "code": "...", "message": "...", "details": {...}? } }
+```
+
+`schema` is the envelope version (bumps only on breaking changes). `dataSchema` is per-type and independent.
+
+Bounded `error.code` set, treated as a stable interface:
+
+`missing-env-var` · `connector-not-found` · `unknown-operation` · `invalid-argument` · `auth-failed` · `remote-error` · `internal-error`
+
+Per-type errors that do not fit the framework set map to `remote-error` with `details.kind` carrying the sub-classification (e.g., `not-found`, `rate-limited`, `transport`, `unexpected`). Adding new codes is additive and triggers a `schema` bump only if a code is removed or repurposed. `src/core/connectors/dispatch.ts` is the only place that returns the envelope; connector handlers throw `ConnectorError` instances that the dispatcher catches and translates. Uncaught exceptions become `internal-error` envelopes — the dispatcher logs them to stderr but the MCP server never crashes on a single tool failure.
+
+#### Gap 45 — GitLab `project` value interpretation (path vs. numeric ID)
+
+**What's missing.** GitLab's API accepts a project identifier as either a URL-encoded path or a numeric ID. The PRD allows both shapes but does not pin the interpretation rule.
+
+**Why it matters.** A `project` value that is purely numeric could be a numeric ID or a path that happens to be all digits (rare but possible). Inconsistent interpretation would let a config validate but produce 404s at runtime.
+
+**Resolution.** `src/core/connectors/types/gitlab-issues/client.ts` applies the rule: `^\d+$` → use verbatim as a numeric project ID; otherwise URL-encode and use as a path. The interpretation is logged at `--verbose` (stderr in MCP mode) so operators can see what GitLab will receive. Validation at config-load time (`schema.ts`) rejects empty / whitespace values but does not attempt to disambiguate path-vs-ID — the runtime rule is sufficient.
+
+#### Gap 46 — Connector mutations refresh MCP registrations
+
+**What's missing.** `maester connector add` and `maester connector remove` must keep the per-host MCP config files in sync with `citadel.yaml`, but the framework PRD does not commit to whether the refresh happens automatically or requires a follow-up `maester skill upgrade`.
+
+**Why it matters.** If the refresh is manual, every connector mutation forces the user to remember a second command — and missing it means the host platform's tool surface goes stale.
+
+**Resolution.** `add` and `remove` end by calling `src/core/mcp/registrations/index.ts.refreshMcpRegistrations(repoRoot)`, which iterates installed Grand Maester targets via `listSkillTargets()` and rewrites each MCP-capable host's managed entry from the updated citadel config. The refresh is idempotent — when no MCP-capable target is installed, the function reports "no MCP hosts to update" and returns without writing. The CLI's final stdout names the files written and reminds the user that their next agent session picks up the change (host platforms usually restart MCP servers automatically when their config file changes; the reminder makes it unambiguous regardless of host behavior).
+
+#### Gap 47 — Connector name collisions with source names
+
+**What's missing.** Sources and connectors live in separate config arrays but share the same slug shape. A connector named `team-docs` and a source named `team-docs` are valid under the schema but reading the config can confuse a future maintainer.
+
+**Why it matters.** Hard rejection would force pointless renames in cases where the two namespaces are genuinely separate (e.g., a `gitlab` source repo and a `gitlab` issues connector that target related-but-different surfaces). Silent acceptance is worst — the maintainer never learns the collision is there.
+
+**Resolution.** Allowed (separate namespaces) but the management commands (`maester init`, `maester connector add`) emit a warning when adding a connector name that already exists in `sources` (and vice versa for sources in future flows). The warning is informational; the entry is still added. The schema does **not** enforce cross-namespace uniqueness — this is a UX warning, not a data-model invariant.
+
+#### Gap 48 — Connector tool description composition
+
+**What's missing.** Each MCP tool's `description` is built from two sources: the per-type's `describeTool(operation, resolvedConfig)` template and the connector entry's optional `description`. The PRD says the entry's `description` is "prepended" but does not pin the chokepoint or the separator.
+
+**Why it matters.** Different agents are sensitive to description format in different ways; a consistent composition rule keeps tool-selection reasoning predictable across hosts.
+
+**Resolution.** Composition happens in a single chokepoint `src/core/connectors/dispatch.ts.buildToolDescription(connector, operation, resolvedConfig)`. Rule: if `connector.description` is set, the output is `${connector.description.trim()} ${typeDescription}` joined with a single space (the connector's description is expected to be a short sentence — the prompt and validation enforce a reasonable maximum length); otherwise the output is `typeDescription` alone. No connector type assembles its own composition. The result is what appears in `tools/list`, in `maester connector list` output, and in any installed Grand Maester sample.
+
 ### Assumptions
 
 - **One repository, one role each.** A repo has at most one `citadel.yaml` and at most one `maester.yaml`. Both can coexist (as confirmed by [Maester Configuration P1](features/maester-configuration.md)); the schemas and tooling assume single-instance per role per repo.
@@ -1633,6 +2281,9 @@ Both writers are idempotent — running install twice against an up-to-date targ
 - **Partial clone requires `git ≥ 2.27`.** The fetch strategy in §6.7 uses `--filter=blob:none` + sparse checkout. Older binaries fall back to a conventional `--depth=1` clone with a `--verbose` notice; final destination contents are identical.
 - **`citadel/` is a safe default top-level directory.** No PRD prohibits the default. Users with a conflicting `citadel/` directory at their repo root will hit the destination-clobber guard (Gap 6) and be directed to either set the top-level `baseDir` to a different folder (Gap 15) or set per-source `destination` overrides.
 - **`--json` output is one JSON object per line (NDJSON).** Implied by [stack.md §9](stack.md). Confirmed here so tests and downstream consumers can rely on it.
+- **MCP-capable Grand Maester targets are Claude Code, Cursor, and Codex CLI.** The Generic `AGENTS.md` target is treated as instruction-only and receives the fallback CLI documentation, not an MCP registration. If a future Grand Maester target adds MCP support, the framework adds one writer file under `src/core/mcp/registrations/` and one entry in that directory's index — no other change.
+- **Codex CLI's project-level MCP convention is `.codex/config.toml` with a `[mcp_servers.<name>]` block** (per its currently-documented schema). The Codex writer in `src/core/mcp/registrations/codex.ts` matches this shape and uses `@iarna/toml` for round-tripping. If Codex's documented path or schema differs at implementation time, the writer is updated in that one file without affecting the rest of the framework.
+- **No live config reload while `maester mcp` is running.** The server reads `citadel.yaml` once at startup. Mid-session connector mutations require the host platform to restart the MCP server (which most do automatically when their MCP config file changes). Live reload is a deferred capability tracked in [traveling-maesters.md](features/traveling-maesters.md).
 
 ---
 
