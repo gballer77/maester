@@ -1,14 +1,16 @@
 import type { ConnectorType } from "./types.js";
+import { gitlabIssuesType } from "./types/gitlab-issues/index.js";
 
 /**
  * Compile-time registry of supported connector types. This module is the only
  * place that imports per-type modules; adding a new type is a one-line change.
  *
- * In v1 the production registry is intentionally empty — the GitLab Issues
- * connector lands as its own follow-on feature and is the first entry. Tests
- * register short-lived fixture types via `__registerTestType` below.
+ * Tests register short-lived fixture types via `__registerTestType` below.
  */
 const REGISTRY = new Map<string, ConnectorType<unknown>>();
+
+// First-party connector types ship registered.
+REGISTRY.set(gitlabIssuesType.id, gitlabIssuesType as unknown as ConnectorType<unknown>);
 
 export function listConnectorTypes(): ConnectorType<unknown>[] {
   return [...REGISTRY.values()];

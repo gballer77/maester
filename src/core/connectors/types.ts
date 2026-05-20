@@ -43,8 +43,13 @@ export type ConnectorContext<TConfig = unknown> = {
 export type ConnectorOperation<TConfig = unknown, TArgs = unknown, TData = unknown> = {
   /** Operation name, kebab-case (e.g. `list-issues`). */
   readonly name: string;
-  /** Validates the operation's args object. Used for both runtime + inputSchema. */
-  readonly argsSchema: z.ZodType<TArgs>;
+  /**
+   * Validates the operation's args object. Used for both runtime + inputSchema.
+   * The third generic is intentionally `unknown` so schemas with `.default()`
+   * or `.optional()` (where the input type differs from the output type) are
+   * accepted — the dispatcher always parses `unknown` input.
+   */
+  readonly argsSchema: z.ZodType<TArgs, z.ZodTypeDef, unknown>;
   /** Per-type data shape version embedded in success payloads. */
   readonly dataSchemaVersion: number;
   /** Pure handler — receives validated args + context; returns `{ data }` or throws. */
@@ -68,8 +73,12 @@ export type ConnectorType<TConfig = unknown> = {
   readonly id: string;
   /** Short human-readable name (e.g. "GitLab Issues"). */
   readonly label: string;
-  /** Validates one connector entry's per-type config object. */
-  readonly configSchema: z.ZodType<TConfig>;
+  /**
+   * Validates one connector entry's per-type config object. Input is
+   * intentionally `unknown` so schemas with `.default()` are accepted — the
+   * citadel-schema `.superRefine` always parses `unknown` config payloads.
+   */
+  readonly configSchema: z.ZodType<TConfig, z.ZodTypeDef, unknown>;
   /** Map of operation name → operation definition. */
   readonly operations: Readonly<Record<string, AnyOperation<TConfig>>>;
   /**
@@ -127,7 +136,7 @@ export type ConnectorToolDescriptor = {
  */
 export function defineConnectorOperation<TConfig, TArgs, TData>(opts: {
   name: string;
-  argsSchema: z.ZodType<TArgs>;
+  argsSchema: z.ZodType<TArgs, z.ZodTypeDef, unknown>;
   dataSchemaVersion: number;
   handler: (args: TArgs, ctx: ConnectorContext<TConfig>) => Promise<{ data: TData }>;
 }): ConnectorOperation<TConfig, TArgs, TData> {

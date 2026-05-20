@@ -11,11 +11,12 @@ describe("resolveAuth", () => {
     expect(resolveAuth({ type: "none" })).toEqual({ type: "delegated" });
   });
 
-  it("reads the token from the named env var", () => {
+  it("reads the token from the named env var and surfaces the env-var name", () => {
     expect(resolveAuth({ type: "token", envVar: "MAESTER_FAKE" }, { MAESTER_FAKE: "abc" })).toEqual(
       {
         type: "token",
         value: "abc",
+        envVar: "MAESTER_FAKE",
       },
     );
   });

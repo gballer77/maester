@@ -93,25 +93,19 @@ describe("CLI: maester connector", () => {
     }
   });
 
-  it("list prints connectors that reference unregistered types with a marker", async () => {
-    // Seed the citadel with a connectors entry whose type is not registered.
-    // The loader will reject this — so we go around it by writing the YAML
-    // bypassing schema and asserting list surfaces the unregistered marker.
-    // Skip when validation prevents this — we just confirm the failure mode
-    // is loud rather than silent.
+  it("list rejects a citadel that references an unregistered connector type", async () => {
+    // Seed the citadel with a connectors entry whose type is not in the
+    // production registry. The citadel validator rejects unknown types at
+    // config-load time; the CLI surfaces the ConfigError on stderr and exits 2.
     await writeCitadelYaml(
       repo,
       `connectors:
   - name: x
-    type: gitlab-issues
-    config:
-      project: my-group/my-project
+    type: __nonexistent_type__
+    config: {}
 `,
     );
     const result = await runCli(["connector", "list"], repo.path);
-    // The citadel validator rejects unknown types; the CLI surfaces the
-    // ConfigError on stderr and exits non-zero. This is the documented
-    // behavior — unknown types are caught at config-load time.
     expect(result.code).toBe(2);
     expect(result.stderr).toMatch(/unknown connector type/i);
   });

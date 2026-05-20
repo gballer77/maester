@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Traveling Maesters (connectors framework)** — a new `connectors:` array in `citadel.yaml`, sibling to `sources:`, that registers external services as live MCP tools. Maester ships a stdio MCP server (`maester mcp`) built on `@modelcontextprotocol/sdk` that reads the citadel, instantiates every configured connector via the compile-time type registry, and exposes each operation as an MCP tool with a deterministic name (`<connector>__<operation>`, kebab → snake). Per-connector entries declare a `type`, a unique `name`, optional `description`, env-var token auth, and a per-type `config` block; unknown types and per-type config errors are caught at config-load time.
+- **GitLab Issues connector** (`type: gitlab-issues`) — first concrete connector type. Two operations exposed as MCP tools: `list-issues` (filters: state, labels, assignee, milestone, search, page, per_page; clamped to GitLab's documented max of 100) and `get-issue` (by project-scoped iid). Per-type config: `host` (HTTPS only, defaults to `https://gitlab.com`), `project` (path or numeric ID — purely numeric values are treated as IDs; paths are URL-encoded). Self-hosted GitLab instances work identically to gitlab.com. Native `fetch` client over `/api/v4`, no SDK dependency. GitLab HTTP outcomes map onto the framework's bounded error-code set (401/403 → `auth-failed` naming the env var, 404 → `remote-error/not-found`, 429 → `remote-error/rate-limited` with `Retry-After`, 5xx → `remote-error/transport`).
+- **`maester mcp` CLI verb** — runs the stdio MCP server in the current citadel-bearing repo. Validates `citadel.yaml` at startup (all-or-nothing — no partial tool surface); reroutes the project logger to stderr so stdout stays reserved for JSON-RPC frames; exits cleanly when stdio closes.
+- **`maester connector` CLI verb group** — `add` (interactive + non-interactive `--type --name --env-var --config --description` flag form), `remove [name] --yes`, `list`, and `exec <name> <operation> [--key value]...` (the framework's P1 fallback dispatch surface for non-MCP agents). All mutating verbs refresh per-host MCP registrations after writing.
+- **Per-host MCP registration writers** — `.mcp.json` (Claude Code), `.cursor/mcp.json` (Cursor), and `.codex/config.toml` (Codex CLI) with a managed `maester` entry that other entries are round-tripped around byte-for-byte. Writes are idempotent; running twice produces byte-identical files. Hooked into Grand Maester skill `install`/`upgrade` and `connector add`/`remove` so the tool surface stays in sync with `citadel.yaml`.
+- **Grand Maester connector policy** — installed Grand Maester artifacts (Claude Code, Codex CLI, Cursor) gain a short fixed policy paragraph about reasoning over connector tool output (live data, cite identifiers, treat as point-in-time, watch the freshness verdict). The Generic `AGENTS.md` target gets a parallel paragraph documenting the fallback CLI. Neither artifact enumerates configured connectors — MCP discovery handles that.
+- **Init walkthrough connector step** — `maester init` adds an optional connector-registration loop between source registration and the Grand Maester offer; declining completes init normally with no `connectors` block written.
+
+### Changed
+- `ResolvedAuth` (returned by `src/core/auth/resolver.ts`) now carries the env-var name in its `token` variant: `{ type: "token"; value: string; envVar: string }`. Lets downstream consumers — including the GitLab connector's 401/403 path — surface the env-var name in error messages without re-walking the original `AuthRef`. The `delegated` variant is unchanged. Backwards-compatible for anything that only reads `type` or `value`.
+
+### Dependencies
+- Added `@modelcontextprotocol/sdk`, `zod-to-json-schema`, `@iarna/toml` as direct runtime dependencies (per architecture Gaps 34, 38, 39).
+
 ## [0.3.0] - 2026-05-14
 
 ### Added

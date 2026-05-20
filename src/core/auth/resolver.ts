@@ -1,7 +1,7 @@
 import type { AuthRef } from "../../schemas/citadel.js";
 import { AuthError } from "../errors.js";
 
-export type ResolvedAuth = { type: "delegated" } | { type: "token"; value: string };
+export type ResolvedAuth = { type: "delegated" } | { type: "token"; value: string; envVar: string };
 
 export function resolveAuth(
   auth: AuthRef | undefined,
@@ -15,5 +15,5 @@ export function resolveAuth(
       `${auth.envVar} is not set. Define it in your shell, .env loader, or CI secret manager before syncing.`,
     );
   }
-  return { type: "token", value };
+  return { type: "token", value, envVar: auth.envVar };
 }

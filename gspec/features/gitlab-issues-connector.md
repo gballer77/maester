@@ -87,78 +87,78 @@ spec-version: v1
 
 ## 4. Capabilities
 
-- [ ] **P0**: The `gitlab-issues` connector type is registered with the Traveling Maesters framework
+- [x] **P0**: The `gitlab-issues` connector type is registered with the Traveling Maesters framework
   - The type identifier `gitlab-issues` is reserved and resolves to this connector's config validator, operation handlers, and tool-description template via the framework's compile-time type registry
   - A citadel config referencing the type loads without error when the per-type config validates; references to a typo'd type identifier fail validation with a clear, field-named error
   - Adding the type to the registry is purely additive to the framework (no changes to the MCP server's wire-protocol code or the framework's error model)
 
-- [ ] **P0**: Per-connector config accepts host, project scope, and per-type optional fields
+- [x] **P0**: Per-connector config accepts host, project scope, and per-type optional fields
   - `host` is optional and defaults to `https://gitlab.com`; values must be HTTPS URLs; non-HTTPS or malformed URLs fail validation at config-load time
   - `project` is required and accepts either the full URL-encoded path (e.g. `my-group/my-project`) or a numeric project ID; an empty or whitespace-only `project` fails validation
   - Validation runs at config-load time so misconfigurations surface immediately, not at first MCP tool invocation
   - The connector entry's auth env-var name is honored as the framework specifies; this PRD does not redefine the auth field
 
-- [ ] **P0**: Each configured connector exposes two MCP tools whose names are deterministically derived from the connector name
+- [x] **P0**: Each configured connector exposes two MCP tools whose names are deterministically derived from the connector name
   - For a connector named `team-gl`, the framework registers MCP tools `team_gl__list_issues` and `team_gl__get_issue` (kebab-case in the connector name converted to snake_case in the tool name per the framework's tool-naming convention)
   - Each tool's `inputSchema` (JSON Schema) is generated from the operation's argument definitions and is returned by the MCP server's `tools/list` response
   - Each tool's `description` is built dynamically from the resolved config — e.g. `"List GitLab issues for project my-group/my-project on gitlab.acme.internal..."` — so the host agent has unambiguous context for tool selection
   - When the citadel-entry `description` field is set, it is prepended to the dynamic description so the maintainer can add team-specific context (e.g. `"App team's GitLab project. Use this when the user asks about the customer-facing API."`)
 
-- [ ] **P0**: The `list-issues` tool accepts the documented filter argument set
+- [x] **P0**: The `list-issues` tool accepts the documented filter argument set
   - The tool accepts arguments (via MCP `tools/call` `arguments`): `state` (`opened` | `closed` | `all`; defaults to `opened`), `labels` (comma-separated string), `assignee` (username or `None` / `Any`), `milestone` (title or `None` / `Any`), `search` (free-text), `page` (default `1`), `per_page` (default `20`)
   - `per_page` is capped at `100` (GitLab's documented maximum); values above the cap clamp to `100` and the result's `meta` notes the clamp
   - Unknown / unsupported argument names are rejected with `invalid-argument` and the offending name in `details`
   - Argument values are passed to GitLab using the GitLab REST issues API's documented parameter names (the connector handles the mapping internally; agents always use the argument names declared in the tool's `inputSchema`)
   - The success result payload `data` field contains an array of issue objects in the v1 output shape plus pagination metadata under `data.meta`
 
-- [ ] **P0**: The `get-issue` tool fetches a single issue by project-scoped iid
+- [x] **P0**: The `get-issue` tool fetches a single issue by project-scoped iid
   - The tool requires `iid` (positive integer)
   - A missing or non-integer `iid` fails with `invalid-argument` and a clear message
   - A successful result returns a single issue object in the v1 output shape under `data`
   - A 404 from GitLab is surfaced as `remote-error` with `details.kind = not-found` and an explicit "issue <iid> not found in project <project>" message
 
-- [ ] **P0**: Tool result data shape is stable and versioned independently of the framework envelope
+- [x] **P0**: Tool result data shape is stable and versioned independently of the framework envelope
   - Issue objects always include `iid`, `id`, `title`, `description`, `state`, `labels`, `assignees`, `milestone` (nullable), `web_url`, `created_at`, `updated_at`, `closed_at` (nullable)
   - `assignees` is an array of `{ username, name }` objects (empty when no assignees); the legacy single-assignee GitLab field is not surfaced separately in v1
   - `milestone` is `null` when no milestone is set; otherwise `{ title, state }`
   - The `data` payload carries `dataSchema: 1` (the per-type shape version); the version increments only on incompatible changes
   - Timestamps are ISO-8601 strings echoing what GitLab returns; no reformatting
 
-- [ ] **P0**: The connector authenticates via the env-var personal access token declared on the connector entry
+- [x] **P0**: The connector authenticates via the env-var personal access token declared on the connector entry
   - At the moment of an MCP tool invocation, the connector reads the credential from the env var named on the connector entry and sends it as the standard GitLab `PRIVATE-TOKEN` header (or `Authorization: Bearer` form when the token type requires it)
   - When the env var is unset or empty, the framework's `missing-env-var` error response is returned before any network call (this capability inherits that behavior; it does not redefine it)
   - The credential is never logged, echoed in errors, or included in `details`; only the env-var **name** appears in error messages
   - Token rotation does not require a citadel-config change — the next tool invocation that the MCP server processes reads the env var freshly (subject to the host platform's process-environment caching; in practice the next agent-session restart guarantees rotation pickup)
 
-- [ ] **P0**: Self-hosted GitLab instances work identically to gitlab.com
+- [x] **P0**: Self-hosted GitLab instances work identically to gitlab.com
   - Setting `host` to a self-hosted URL (e.g. `https://gitlab.acme.internal`) routes all API calls to that host
   - HTTPS-only transport is enforced; non-HTTPS `host` values fail validation
   - TLS verification is enabled; v1 does not expose a "skip verification" option
   - Self-hosted-specific paths or path prefixes are not assumed — the standard `/api/v4` shape is used regardless of host
 
-- [ ] **P0**: GitLab API errors map onto the framework's documented MCP tool-error responses
+- [x] **P0**: GitLab API errors map onto the framework's documented MCP tool-error responses
   - HTTP 401 / 403 → `auth-failed`; the error message names the env-var (not the value) and the host
   - HTTP 404 → `remote-error` with `details.kind = not-found`; the message distinguishes "project not found" from "issue not found" when the connector can tell the two apart
   - HTTP 429 → `remote-error` with `details.kind = rate-limited` and the GitLab `Retry-After` header value when present
   - HTTP 5xx or network/transport failure → `remote-error` with `details.kind = transport`
   - Any other unexpected response shape → `remote-error` with `details.kind = unexpected` and a truncated body excerpt in `details.body` for the agent to surface
 
-- [ ] **P0**: The framework's MCP `tools/list` is the canonical introspection surface for this connector
+- [x] **P0**: The framework's MCP `tools/list` is the canonical introspection surface for this connector
   - The connector type's operation handlers contribute the tool name, `description`, and `inputSchema` to the framework's `tools/list` response — no separate connector-specific introspection operation is needed
   - The introspection data does not require the auth env var and never makes a network call (it is built from the registered operation definitions plus the resolved connector config)
   - The output is stable enough for Grand Maester's policy paragraph to reference the canonical tool naming and result shape
 
-- [ ] **P1**: `list-issues` returns pagination metadata sufficient for the agent to navigate large result sets
+- [x] **P1**: `list-issues` returns pagination metadata sufficient for the agent to navigate large result sets
   - The result includes `page`, `per_page`, and (when GitLab provides them via response headers) `total_pages` and `total` under `data.meta`
   - When GitLab omits the totals headers for performance reasons, the connector returns the missing fields as `null` rather than fabricating them
   - The agent can fetch subsequent pages by re-invoking with an incremented `page`
 
-- [ ] **P1**: Argument parsing produces clear `invalid-argument` errors for malformed inputs
+- [x] **P1**: Argument parsing produces clear `invalid-argument` errors for malformed inputs
   - A non-comma-separated `labels` value (e.g. accidental spaces or `;` separators) is rejected with a message that explains the expected form
   - A non-integer `page` or `per_page` is rejected with `invalid-argument`
   - An `assignee` or `milestone` value containing whitespace or special characters is passed through unchanged (GitLab accepts user-input names verbatim); only obviously malformed inputs (e.g. control characters) are rejected
 
-- [ ] **P1**: The connector is reachable via the framework's fallback CLI for non-MCP agent platforms
+- [x] **P1**: The connector is reachable via the framework's fallback CLI for non-MCP agent platforms
   - `maester connector <name> list-issues [--state ...] [--labels ...]` and `maester connector <name> get-issue --iid <n>` dispatch the same per-connector code as the MCP path
   - Output is JSON on stdout with the framework's fallback envelope; exit code zero on success, non-zero on failure; the `data` and `error` shapes are byte-equivalent to what the MCP tool result encodes inside its content block
   - The fallback is the path agents using the Generic `AGENTS.md` Grand Maester target use; the named MCP targets always go through MCP
