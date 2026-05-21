@@ -81,7 +81,10 @@ describe("CLI: maester skill", () => {
     const mcp = JSON.parse(await fs.readFile(repo.resolve(".mcp.json"), "utf8")) as {
       mcpServers: { maester?: { command: string; args: string[] } };
     };
-    expect(mcp.mcpServers.maester).toEqual({ command: "npx", args: ["maester", "mcp"] });
+    expect(mcp.mcpServers.maester).toEqual({
+      command: "npx",
+      args: ["-y", "baller-maester", "mcp"],
+    });
   });
 
   it("install with --json emits NDJSON outcomes and a summary line", async () => {

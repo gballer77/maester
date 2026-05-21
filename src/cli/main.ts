@@ -44,7 +44,7 @@ function maybeRenderHelpVersionBanner(argv: readonly string[]): void {
   const wantsVersion = tail.includes("--version") || tail.includes("-V");
   if (!wantsHelp && !wantsVersion) return;
   const theming = createTheming();
-  const subtitle = wantsVersion ? "v0.1.0 · living specs" : "living specs · v0.1.0";
+  const subtitle = wantsVersion ? "v0.4.0 · living specs" : "living specs · v0.4.0";
   const banner = bannerForContext(theming, readColumns(), subtitle);
   if (banner.length > 0) {
     process.stdout.write(`${banner}\n\n`);
@@ -65,7 +65,7 @@ function buildProgram(): Command {
   program
     .name("maester")
     .description("Aggregate documentation from many sources into one citadel.")
-    .version("0.1.0", "-V, --version", "Print the maester version.")
+    .version("0.4.0", "-V, --version", "Print the maester version.")
     .option("--verbose", "Show verbose output")
     .option("--quiet", "Suppress all output except errors")
     .option("--json", "Emit machine-readable JSON output (one object per line)")
@@ -121,7 +121,7 @@ async function runNoArgs(ctx: CliContext): Promise<number> {
   const roles = detectRoles(ctx.repoRoot.path);
   const showWelcome = !roles.hasCitadel && !roles.hasMaester && !ctx.flags.noWelcome;
   if (showWelcome) {
-    const banner = bannerForContext(ctx.theming, readColumns(), "living specs · v0.1.0");
+    const banner = bannerForContext(ctx.theming, readColumns(), "living specs · v0.4.0");
     if (banner.length > 0) {
       process.stdout.write(`${banner}\n\n`);
     }

@@ -31,7 +31,6 @@ describe("refreshMcpRegistrations", () => {
     const outcomes = await refreshMcpRegistrations(repoRoot);
     const hosts = outcomes.map((o) => o.host).sort();
     expect(hosts).toEqual(["claude-code", "codex"]);
-    // Files exist where expected
     expect(await fileExists(path.join(repoRoot, ".mcp.json"))).toBe(true);
     expect(await fileExists(path.join(repoRoot, ".codex", "config.toml"))).toBe(true);
     expect(await fileExists(path.join(repoRoot, ".cursor", "mcp.json"))).toBe(false);

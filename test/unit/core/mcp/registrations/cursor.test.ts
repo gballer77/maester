@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { writeCursorMcpEntry } from "../../../../../src/core/mcp/registrations/cursor.js";
 
 let repoRoot: string;
+const launch = { command: "/fake/path/to/maester", args: ["mcp"] };
 
 beforeEach(async () => {
   repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "maester-mcp-cursor-"));
@@ -16,16 +17,19 @@ afterEach(async () => {
 
 describe("writeCursorMcpEntry", () => {
   it("creates .cursor/mcp.json with the maester entry", async () => {
-    const out = await writeCursorMcpEntry(repoRoot);
+    const out = await writeCursorMcpEntry(repoRoot, { launch });
     expect(out.action).toBe("written");
     const text = await fs.readFile(path.join(repoRoot, ".cursor", "mcp.json"), "utf8");
     const parsed = JSON.parse(text);
-    expect(parsed.mcpServers.maester).toEqual({ command: "npx", args: ["maester", "mcp"] });
+    expect(parsed.mcpServers.maester).toEqual({
+      command: "/fake/path/to/maester",
+      args: ["mcp"],
+    });
   });
 
   it("is idempotent on a second write", async () => {
-    await writeCursorMcpEntry(repoRoot);
-    const out = await writeCursorMcpEntry(repoRoot);
+    await writeCursorMcpEntry(repoRoot, { launch });
+    const out = await writeCursorMcpEntry(repoRoot, { launch });
     expect(out.action).toBe("unchanged");
   });
 
@@ -36,7 +40,7 @@ describe("writeCursorMcpEntry", () => {
       `${JSON.stringify({ mcpServers: { vendor: { command: "x" } } }, null, 2)}\n`,
       "utf8",
     );
-    await writeCursorMcpEntry(repoRoot);
+    await writeCursorMcpEntry(repoRoot, { launch });
     const parsed = JSON.parse(
       await fs.readFile(path.join(repoRoot, ".cursor", "mcp.json"), "utf8"),
     );

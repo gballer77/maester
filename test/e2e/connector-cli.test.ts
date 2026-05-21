@@ -93,6 +93,39 @@ describe("CLI: maester connector", () => {
     }
   });
 
+  it("refresh succeeds on a citadel with zero connectors and no Grand Maester installed", async () => {
+    await writeCitadelYaml(repo);
+    const result = await runCli(["connector", "refresh"], repo.path);
+    expect(result.code).toBe(0);
+    expect(result.stdout + result.stderr).toMatch(/no connectors/i);
+    expect(result.stdout + result.stderr).toMatch(/No MCP-capable Grand Maester targets installed/);
+  });
+
+  it("refresh outside a citadel-bearing directory exits 2 with a clear error", async () => {
+    const empty = await makeTmpRepo();
+    try {
+      const result = await runCli(["connector", "refresh"], empty.path);
+      expect(result.code).toBe(2);
+      expect(result.stderr).toMatch(/citadel\.yaml/);
+    } finally {
+      await empty.cleanup();
+    }
+  });
+
+  it("refresh rejects a citadel that references an unregistered connector type", async () => {
+    await writeCitadelYaml(
+      repo,
+      `connectors:
+  - name: x
+    type: __nonexistent_type__
+    config: {}
+`,
+    );
+    const result = await runCli(["connector", "refresh"], repo.path);
+    expect(result.code).toBe(2);
+    expect(result.stderr).toMatch(/unknown connector type/i);
+  });
+
   it("list rejects a citadel that references an unregistered connector type", async () => {
     // Seed the citadel with a connectors entry whose type is not in the
     // production registry. The citadel validator rejects unknown types at

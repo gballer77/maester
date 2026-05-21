@@ -62,6 +62,15 @@ export function registerConnector(program: Command, getContext: () => CliContext
     });
 
   group
+    .command("refresh")
+    .description(
+      "Re-validate citadel.yaml and refresh per-host MCP registrations. Use this after editing citadel.yaml by hand.",
+    )
+    .action(async () => {
+      process.exitCode = await runRefresh(getContext());
+    });
+
+  group
     .command("exec <name> <operation> [args...]")
     .description(
       "Fallback dispatch for non-MCP agent hosts. Invokes the named operation; prints the JSON envelope on stdout.",
@@ -262,6 +271,24 @@ async function runRemove(ctx: CliContext, name: string, yes: boolean): Promise<n
     }
     return handleCitadelLoadError(ctx, err);
   }
+}
+
+async function runRefresh(ctx: CliContext): Promise<number> {
+  let config: Awaited<ReturnType<typeof loadCitadelConfig>>;
+  try {
+    config = await loadCitadelConfig(ctx.repoRoot.path);
+  } catch (err) {
+    return handleCitadelLoadError(ctx, err);
+  }
+  const count = config.connectors?.length ?? 0;
+  ctx.prompts.log.info(
+    count === 0
+      ? "citadel.yaml has no connectors. Refreshing per-host MCP entries anyway so the maester server stays registered."
+      : `citadel.yaml lists ${count} connector${count === 1 ? "" : "s"}. Refreshing per-host MCP entries.`,
+  );
+  const outcomes = await refreshMcpRegistrations(ctx.repoRoot.path);
+  reportRefresh(ctx, outcomes);
+  return EXIT_OK;
 }
 
 async function runExec(
