@@ -5,8 +5,8 @@ import { type MaesterLaunchCommand, resolveMaesterLaunchCommand } from "./comman
 
 const CONFIG_FILE = path.join(".codex", "config.toml");
 
-function maesterBlock(repoRoot: string, launch: MaesterLaunchCommand): TOML.JsonMap {
-  return { command: launch.command, args: [...launch.args], cwd: repoRoot };
+function maesterBlock(launch: MaesterLaunchCommand): TOML.JsonMap {
+  return { command: launch.command, args: [...launch.args] };
 }
 
 export type WriteOutcome = { filePath: string; action: "written" | "unchanged" };
@@ -22,14 +22,12 @@ export type WriteOptions = {
 
 /**
  * Write or refresh `[mcp_servers.maester]` inside `<repo>/.codex/config.toml`.
- * Includes a `cwd = "<absolute-citadel-path>"` field because Codex spawns MCP
- * subprocesses with `cwd = /` regardless of which config supplied the entry —
- * without it the server boots in `/` and exits looking for `citadel.yaml`.
  *
  * The block's `command`/`args` come from `resolveMaesterLaunchCommand()`,
  * which emits the standard MCP-ecosystem convention
  * `npx -y baller-maester mcp` — portable across machines and self-updating
- * on `npm publish`.
+ * on `npm publish`. No absolute paths are embedded, so the file is safe to
+ * commit.
  *
  * Codex CLI reads `<repo>/.codex/config.toml` for trusted projects and
  * merges it with the user-global `~/.codex/config.toml` (verified on Codex
@@ -47,7 +45,7 @@ export async function writeCodexMcpEntry(
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const existingText = await readOrUndefined(filePath);
   const launch = options.launch ?? resolveMaesterLaunchCommand();
-  const newText = renderTomlWithMaesterBlock(existingText, repoRoot, launch);
+  const newText = renderTomlWithMaesterBlock(existingText, launch);
   if (existingText === newText) {
     return { filePath, action: "unchanged" };
   }
@@ -57,7 +55,6 @@ export async function writeCodexMcpEntry(
 
 export function renderTomlWithMaesterBlock(
   existingText: string | undefined,
-  repoRoot: string,
   launch: MaesterLaunchCommand,
 ): string {
   const parsed: TOML.JsonMap =
@@ -65,7 +62,7 @@ export function renderTomlWithMaesterBlock(
       ? TOML.parse(existingText)
       : ({} as TOML.JsonMap);
   const mcpServers: TOML.JsonMap = isJsonMap(parsed.mcp_servers) ? { ...parsed.mcp_servers } : {};
-  mcpServers.maester = maesterBlock(repoRoot, launch);
+  mcpServers.maester = maesterBlock(launch);
   const next: TOML.JsonMap = { ...parsed, mcp_servers: mcpServers };
   return TOML.stringify(next);
 }

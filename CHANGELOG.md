@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-05-21
+
+### Changed
+- **Codex CLI `.codex/config.toml` `[mcp_servers.maester]` block no longer carries a `cwd` field.** Testing on Codex CLI v0.132 confirmed Codex launches the server correctly without it, so the absolute citadel path is gone and the file is now portable and safe to commit. Touches the writer (`src/core/mcp/registrations/codex.ts`), its unit tests, and the matching `gspec/architecture.md` entries that previously stated the `cwd` field was required.
+
 ## [0.4.1] - 2026-05-21
 
 ### Fixed

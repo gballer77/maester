@@ -19,13 +19,13 @@ afterEach(async () => {
 const configPath = (): string => path.join(repoRoot, ".codex", "config.toml");
 
 describe("writeCodexMcpEntry", () => {
-  it("creates <repo>/.codex/config.toml with [mcp_servers.maester] including cwd and the resolved command", async () => {
+  it("creates <repo>/.codex/config.toml with [mcp_servers.maester] containing only the resolved command", async () => {
     const out = await writeCodexMcpEntry(repoRoot, { launch });
     expect(out.action).toBe("written");
     expect(out.filePath).toBe(configPath());
     const parsed = TOML.parse(await fs.readFile(configPath(), "utf8"));
     expect(parsed.mcp_servers).toEqual({
-      maester: { command: "/fake/path/to/maester", args: ["mcp"], cwd: repoRoot },
+      maester: { command: "/fake/path/to/maester", args: ["mcp"] },
     });
   });
 
@@ -47,7 +47,7 @@ describe("writeCodexMcpEntry", () => {
     expect(parsed.model).toEqual({ name: "gpt-4" });
     expect(parsed.mcp_servers).toEqual({
       other: { command: "node", args: ["other.js"] },
-      maester: { command: "/fake/path/to/maester", args: ["mcp"], cwd: repoRoot },
+      maester: { command: "/fake/path/to/maester", args: ["mcp"] },
     });
   });
 
@@ -59,7 +59,7 @@ describe("writeCodexMcpEntry", () => {
     expect(out.action).toBe("written");
     const parsed = TOML.parse(await fs.readFile(configPath(), "utf8"));
     expect(parsed.mcp_servers).toEqual({
-      maester: { command: "/fake/path/to/maester", args: ["mcp"], cwd: repoRoot },
+      maester: { command: "/fake/path/to/maester", args: ["mcp"] },
     });
   });
 });
