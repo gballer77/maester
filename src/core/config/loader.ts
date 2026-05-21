@@ -11,7 +11,7 @@ export async function loadCitadelConfig(repoRoot: string): Promise<CitadelConfig
   const path = citadelConfigPath(repoRoot);
   if (!existsSync(path)) {
     throw new ConfigError(
-      "No citadel.yaml found at the repository root. Run `npx maester init` to create one.",
+      "No citadel.yaml found at the repository root. Run `npx baller-maester init` to create one.",
       { filePath: path },
     );
   }
@@ -23,7 +23,7 @@ export async function loadMaesterConfig(repoRoot: string): Promise<MaesterConfig
   const path = maesterConfigPath(repoRoot);
   if (!existsSync(path)) {
     throw new ConfigError(
-      "No maester.yaml found at the repository root. Run `npx maester publish` to create one.",
+      "No maester.yaml found at the repository root. Run `npx baller-maester publish` to create one.",
       { filePath: path },
     );
   }

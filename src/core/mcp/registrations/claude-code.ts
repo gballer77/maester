@@ -23,9 +23,9 @@ function maesterEntry(launch: MaesterLaunchCommand): Record<string, unknown> {
  * Round-trips every other top-level key and every other entry under
  * `mcpServers`. Idempotent — running twice produces byte-identical output.
  *
- * The `command` field embeds the absolute path to the running `maester`
- * binary (`process.argv[1]`) rather than `npx maester`, because `npx`
- * resolves by npm package name and our package is `baller-maester`.
+ * The `command`/`args` come from `resolveMaesterLaunchCommand()`, which
+ * emits the standard MCP-ecosystem convention `npx -y baller-maester mcp`
+ * — portable across machines and self-updating on `npm publish`.
  */
 export async function writeClaudeCodeMcpEntry(
   repoRoot: string,

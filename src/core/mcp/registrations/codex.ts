@@ -26,9 +26,10 @@ export type WriteOptions = {
  * subprocesses with `cwd = /` regardless of which config supplied the entry —
  * without it the server boots in `/` and exits looking for `citadel.yaml`.
  *
- * The block's `command` field embeds the absolute path to the running
- * `maester` binary (`process.argv[1]`) rather than `npx maester`, because
- * `npx` resolves by npm package name and the package is `baller-maester`.
+ * The block's `command`/`args` come from `resolveMaesterLaunchCommand()`,
+ * which emits the standard MCP-ecosystem convention
+ * `npx -y baller-maester mcp` — portable across machines and self-updating
+ * on `npm publish`.
  *
  * Codex CLI reads `<repo>/.codex/config.toml` for trusted projects and
  * merges it with the user-global `~/.codex/config.toml` (verified on Codex

@@ -9,7 +9,7 @@ implementation-order: 2
 
 **Feature name:** Citadel Initialization
 
-**Summary:** An interactive flow (reached from the `npx maester` top-level menu) that bootstraps a "citadel" in any repository — the central configuration that declares which remote git repositories this project pulls knowledge from, how their content is filtered, and the auth references and local script needed to sync them. Each declared source is either **manifest-driven** (the remote owns a `maester.yaml` describing what it publishes) or **includes-driven** (the citadel declares an `includes` list directly on the source).
+**Summary:** An interactive flow (reached from the `npx baller-maester` top-level menu) that bootstraps a "citadel" in any repository — the central configuration that declares which remote git repositories this project pulls knowledge from, how their content is filtered, and the auth references and local script needed to sync them. Each declared source is either **manifest-driven** (the remote owns a `maester.yaml` describing what it publishes) or **includes-driven** (the citadel declares an `includes` list directly on the source).
 
 **Problem being solved:** Teams want their local repositories to consume curated content (docs, playbooks, conventions, specs) from one or more shared remote repositories — both repos they own (which can publish a `maester.yaml` manifest) and repos they don't (which cannot). There is no standard, low-friction way to declare those sources, store auth references safely, and wire up a re-runnable sync. Citadel initialization gives every repository a single, version-controllable starting point — the user runs one command, answers a short walkthrough, and ends up with a committed config file plus a working sync script.
 
@@ -21,16 +21,16 @@ implementation-order: 2
 - AI-assisted developers who want external knowledge surfaced into their working tree so coding agents can read it
 
 **Key use cases:**
-1. **First-time setup in an empty or existing repo.** A developer runs `npx maester` in a project that has no citadel, picks "Initialize a citadel" from the top-level menu, registers one or more sources interactively, and ends with a committed config plus a sync script.
+1. **First-time setup in an empty or existing repo.** A developer runs `npx baller-maester` in a project that has no citadel, picks "Initialize a citadel" from the top-level menu, registers one or more sources interactively, and ends with a committed config plus a sync script.
 2. **Adding additional sources during init.** During the same walkthrough, the user registers multiple remotes (e.g. `team-docs`, `architecture-playbooks`, `security-standards`) without leaving the prompt.
-3. **Idempotent re-run.** A user re-runs `npx maester` on a repo that already has a citadel. The top-level menu detects the existing configuration and offers safe next steps (view, exit, or guided edit) rather than offering to overwrite silently.
+3. **Idempotent re-run.** A user re-runs `npx baller-maester` on a repo that already has a citadel. The top-level menu detects the existing configuration and offers safe next steps (view, exit, or guided edit) rather than offering to overwrite silently.
 4. **Private-repo registration with env-var auth.** A user adds a private source. The walkthrough captures the environment variable name where the token will live (not the token itself), keeping secrets out of the committed config.
 5. **Pulling from a repo that does not publish a `maester.yaml`.** A user registers a public third-party repo as a source and, when prompted, declares an `includes` list (e.g. `docs/**/*.md, README.md`) directly during the walkthrough so the citadel owns the filter set.
 
 ## 3. Scope
 
 **In-scope:**
-- An "Initialize a citadel" entry in the `npx maester` top-level menu, sibling to the maester-configuration entry
+- An "Initialize a citadel" entry in the `npx baller-maester` top-level menu, sibling to the maester-configuration entry
 - Interactive walkthrough that gathers: confirmation to create a citadel, one or more source entries (name, git URL, ref, optional `includes` list with a per-entry state choice — `draft`, `canon`, or "file header" to defer to inline state in the file — auth scheme, optional destination override, optional description and tags)
 - Writing a citadel configuration file at the repository root
 - Scaffolding/installing a local sync script in the repository so `maester sync` can be invoked later
@@ -55,9 +55,9 @@ implementation-order: 2
 
 ## 4. Capabilities
 
-- [x] **P0**: User can reach the "Initialize a citadel" flow from the `npx maester` top-level menu
+- [x] **P0**: User can reach the "Initialize a citadel" flow from the `npx baller-maester` top-level menu
   - The top-level menu offers citadel initialization as a clearly labeled option
-  - Command is invokable via `npx maester` without prior global install
+  - Command is invokable via `npx baller-maester` without prior global install
   - Selecting it from a repo with no existing citadel config opens the initialization walkthrough
   - User who declines exits cleanly without writing any files
   - User who accepts proceeds into the source-registration steps
@@ -96,7 +96,7 @@ implementation-order: 2
   - The scaffolded sync entrypoint executes against the citadel config produced by init
   - The scaffolding is documented in stdout at the end of the walkthrough so the user knows exactly how to run it
 
-- [x] **P1**: Re-running `npx maester` on a repo that already has a citadel is safe
+- [x] **P1**: Re-running `npx baller-maester` on a repo that already has a citadel is safe
   - When the user selects "Initialize a citadel" in a repo that already has one, the existing config is detected and never silently overwritten
   - User is shown the current citadel summary (source count, names) and offered safe options (view config path, exit)
   - Re-running in a configured repo never deletes, truncates, or replaces the existing config without explicit confirmation
@@ -117,11 +117,11 @@ implementation-order: 2
 ## 5. Dependencies
 
 - **Maester Sync** ([maester-sync.md](maester-sync.md)) — init scaffolds the sync entrypoint, but the runtime behavior of sync is defined and delivered by that feature. Init must produce a config file shape that Maester Sync can consume.
-- **Maester Configuration** ([maester-configuration.md](maester-configuration.md)) — Shares the `npx maester` top-level menu entrypoint. The two flows are siblings under that menu; neither depends on the other's runtime behavior.
+- **Maester Configuration** ([maester-configuration.md](maester-configuration.md)) — Shares the `npx baller-maester` top-level menu entrypoint. The two flows are siblings under that menu; neither depends on the other's runtime behavior.
 - **Grand Maester Skill** ([grand-maester-skill.md](grand-maester-skill.md)) — Init invokes the Grand Maester install flow when the user accepts the optional install step. The install flow (target-agent selection and artifact writing) is owned by that feature; init only owns the prompt and the handoff.
 
 **External dependencies:**
-- A package registry / distribution channel that makes `npx maester` executable without a prior global install
+- A package registry / distribution channel that makes `npx baller-maester` executable without a prior global install
 - Local availability of `git` is expected at sync time (init itself does not invoke git)
 
 ## 6. Assumptions & Risks
@@ -144,7 +144,7 @@ implementation-order: 2
 - A user can go from "empty repo" to "valid, committable citadel config + runnable sync entrypoint" in one command and under a minute of interaction
 - 100% of generated config files are accepted by Maester Sync without manual edits
 - Zero secret values are written to disk by the init flow across all supported auth choices
-- Re-running `npx maester` on a configured repo never destroys or silently mutates the existing citadel configuration
+- Re-running `npx baller-maester` on a configured repo never destroys or silently mutates the existing citadel configuration
 
 ## 8. Implementation Context
 

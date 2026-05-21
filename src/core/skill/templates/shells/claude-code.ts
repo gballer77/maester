@@ -51,7 +51,7 @@ export function buildClaudeMaesterBlock(version: string): ClaudeMaesterBlock {
       PreToolUse: [
         {
           matcher: "Read|Glob|Grep",
-          hooks: [{ type: "command", command: "npx maester skill runtime preread" }],
+          hooks: [{ type: "command", command: "npx -y baller-maester skill runtime preread" }],
         },
       ],
     },

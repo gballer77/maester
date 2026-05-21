@@ -248,7 +248,7 @@ Not applicable — greenfield project.
 - **Oclif** for the CLI — rejected because the plugin model is heavier than needed at this stage.
 - **`@inquirer/prompts`** for interactive prompts — viable and arguably more mature; rejected because Clack matches the style guide's visual language with less customization.
 - **`prompts` (terkelg)** — lightweight and elegant; close to Clack in spirit but no longer actively developed. Clack picks up where it left off.
-- **`gum`** (Charm's Go binary, shelled out) — the gold-standard Charm experience but requires users to install a separate Go binary, which kills the `npx maester` story.
+- **`gum`** (Charm's Go binary, shelled out) — the gold-standard Charm experience but requires users to install a separate Go binary, which kills the `npx baller-maester` story.
 - **`ora`** for spinners alongside Inquirer — viable if we move off Clack; until then, Clack's built-in spinner is preferred for consistency.
 - **`picocolors`** for color — viable for ANSI-named colors but lacks truecolor APIs the style guide depends on.
 - **`node:test`** for testing — viable; Vitest chosen for mocking, watch, and config experience.

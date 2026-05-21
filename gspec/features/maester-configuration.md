@@ -9,7 +9,7 @@ implementation-order: 3
 
 **Feature name:** Maester Configuration
 
-**Summary:** An interactive flow (reached from the `npx maester` top-level menu) that turns the current repository into a "maester" — a git repository that publishes a curated set of documents to any citadel that requests them. The flow produces a maester configuration file at the repository root that declares which paths the repo publishes and what they represent. No scripts are scaffolded; the maester is purely a published manifest.
+**Summary:** An interactive flow (reached from the `npx baller-maester` top-level menu) that turns the current repository into a "maester" — a git repository that publishes a curated set of documents to any citadel that requests them. The flow produces a maester configuration file at the repository root that declares which paths the repo publishes and what they represent. No scripts are scaffolded; the maester is purely a published manifest.
 
 **Problem being solved:** A repository that holds knowledge worth sharing (a service README, a set of runbooks, architecture notes, conventions) has no standard way to declare which files it is willing to publish to consumers. Without that declaration, every citadel either pulls the entire tree or has to negotiate paths out-of-band. Maester Configuration gives every repository a single, committable file that names exactly what it offers — so citadels can pull a precise, intentional subset and so the publishing team owns the contract.
 
@@ -23,7 +23,7 @@ implementation-order: 3
 - Engineers in a system-of-systems environment where each repo contributes a piece of a larger knowledge picture
 
 **Key use cases:**
-1. **First-time configuration of a microservice repo.** A developer in a service repo runs `npx maester`, picks "Configure this repo as a maester" from the top-level menu, declares `README.md` as the published document, and ends with a committed maester config.
+1. **First-time configuration of a microservice repo.** A developer in a service repo runs `npx baller-maester`, picks "Configure this repo as a maester" from the top-level menu, declares `README.md` as the published document, and ends with a committed maester config.
 2. **Multi-document publication.** A larger repo declares several published documents (README, ADR directory, runbooks) in one walkthrough, each with an optional category/description so a consuming citadel can tell them apart.
 3. **Both roles in one repo (rare).** A repo that is itself a citadel for upstream sources also publishes a curated subset downstream; both configs coexist at the repo root because they are independent files.
 4. **Re-running safely.** The user re-enters the maester configuration flow in a repo that is already configured. The flow detects the existing manifest and offers safe options without destructive overwrites.
@@ -31,7 +31,7 @@ implementation-order: 3
 ## 3. Scope
 
 **In-scope:**
-- A "Configure this repo as a maester" entry in the `npx maester` top-level menu
+- A "Configure this repo as a maester" entry in the `npx baller-maester` top-level menu
 - Interactive walkthrough that collects one or more published-document entries
 - Each entry: a path (file or glob, relative to the repo root), an optional `state` choice (`draft`, `canon`, or "file header" to defer to inline state in each file), plus optional metadata (description, category, tags)
 - Writing the maester configuration file at the repository root
@@ -56,7 +56,7 @@ implementation-order: 3
 
 ## 4. Capabilities
 
-- [x] **P0**: User can reach the "Configure this repo as a maester" flow from the `npx maester` top-level menu
+- [x] **P0**: User can reach the "Configure this repo as a maester" flow from the `npx baller-maester` top-level menu
   - The top-level menu offers maester configuration as a clearly labeled option
   - Selecting it from a repo with no existing maester config opens the configuration walkthrough
   - The flow is reachable without any prior global install (still invokable via `npx`)
@@ -113,12 +113,12 @@ implementation-order: 3
 
 ## 5. Dependencies
 
-- **Citadel Initialization** ([citadel-initialization.md](citadel-initialization.md)) — Shares the `npx maester` top-level menu entrypoint. The two flows are siblings under that menu; neither depends on the other's runtime behavior.
+- **Citadel Initialization** ([citadel-initialization.md](citadel-initialization.md)) — Shares the `npx baller-maester` top-level menu entrypoint. The two flows are siblings under that menu; neither depends on the other's runtime behavior.
 - **Maester Sync** ([maester-sync.md](maester-sync.md)) — Consumes the manifest produced by this feature. Maester Sync's P1 capability ("honor path filters published by each maester's own configuration") is the consumption contract for this manifest.
 - **Pretty CLI** ([pretty-cli.md](pretty-cli.md)) — All walkthrough prompts, summaries, and status messages render through the shared CLI styling layer.
 
 **External dependencies:**
-- A package registry / distribution channel that makes `npx maester` executable without a prior global install
+- A package registry / distribution channel that makes `npx baller-maester` executable without a prior global install
 
 ## 6. Assumptions & Risks
 

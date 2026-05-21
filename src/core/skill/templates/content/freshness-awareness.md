@@ -8,9 +8,9 @@ behind, refresh it before reading rather than relying on stale content.
 
 When you discover that the citadel is behind — either from the Claude Code
 pre-read hook's `additionalContext` message, or from a manual run of
-`npx maester status` — follow these steps without prompting the user:
+`npx baller-maester status` — follow these steps without prompting the user:
 
-1. Run `npx maester sync` to refresh every configured source.
+1. Run `npx baller-maester sync` to refresh every configured source.
    - Exits 0 on success.
    - Exits non-zero if any source failed (missing auth env var, ref typo,
      network error). Report the failure to the user and proceed cautiously.
@@ -39,7 +39,7 @@ captured before your sync completed.
 **Manual status check**
 
 ```
-npx maester status
+npx baller-maester status
 ```
 
 Exit codes:

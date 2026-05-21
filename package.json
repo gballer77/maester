@@ -1,6 +1,6 @@
 {
   "name": "baller-maester",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "A Node CLI for aggregating documentation from many sources into one central knowledge home for developers and AI agents.",
   "type": "module",
   "engines": {

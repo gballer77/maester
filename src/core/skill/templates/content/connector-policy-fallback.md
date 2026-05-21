@@ -5,8 +5,8 @@ agent platform does not speak MCP, so connector operations are reached via the
 fallback CLI:
 
 ```
-npx maester connector list
-npx maester connector exec <connector-name> <operation> [--key value]...
+npx baller-maester connector list
+npx baller-maester connector exec <connector-name> <operation> [--key value]...
 ```
 
 - `connector list` prints the configured connectors and the operations they

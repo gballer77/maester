@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-21
+
+### Fixed
+- **Docs and CLI strings now use the correct npm package name.** Every `npx maester ...` invocation has been replaced with `npx baller-maester ...` (or `npx -y baller-maester ...` for automation contexts). `npx` resolves by npm package name and this project publishes as `baller-maester`, so the old form would have failed at the registry. Touches the README, CHANGELOG, every `gspec/` document that named the command, both skill-template content files (freshness-awareness and connector-policy-fallback), the `maester init` outro, the missing-config error messages in the config loader, and the auto-generated `citadel.yaml` / `maester.yaml` header comments.
+- **Grand Maester `PreToolUse` hook command is now actually invokable.** The `.claude/settings.json` block installed by `maester skill install` previously embedded `npx maester skill runtime preread`, which would fail npm-side resolution. Updated to `npx -y baller-maester skill runtime preread` (matching the existing MCP-registration convention). The `-y` flag skips npx's first-run confirmation so the hook does not stall Claude Code's tool-call flow.
+- **Stale docstrings on the MCP registration writers** for Claude Code and Codex CLI claimed the entry embedded `process.argv[1]` rather than `npx maester`; the code has actually emitted `npx -y baller-maester mcp` since 0.4.0. Rewrote both docstrings to match reality.
+
 ## [0.4.0] - 2026-05-21
 
 ### Added
@@ -56,5 +63,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Sync orchestration consolidated into a single `src/core/sources/fetcher.ts` (replacing the previously planned per-kind modules). The fetcher branches internally on whether the source declares an `includes` list.
-- **Repo-root detection is now always the current working directory.** `npx maester` (and every subcommand) treats `process.cwd()` as the root unconditionally — the old walk-upward-for-`.git`/`package.json` behavior is removed. `citadel.yaml` and `maester.yaml` always land in the directory where you typed the command, never in an ancestor. An existing config file in an ancestor directory is invisible to the cwd model.
+- **Repo-root detection is now always the current working directory.** `npx baller-maester` (and every subcommand) treats `process.cwd()` as the root unconditionally — the old walk-upward-for-`.git`/`package.json` behavior is removed. `citadel.yaml` and `maester.yaml` always land in the directory where you typed the command, never in an ancestor. An existing config file in an ancestor directory is invisible to the cwd model.
 - Top-level `baseDir` field on `citadel.yaml` (optional). When set, every source whose `destination` is unset is surfaced at `<baseDir>/<source-name>/` instead of `citadel/<source-name>/`. Per-source `destination` overrides always win. Omitting `baseDir` is identical to today's behavior — fully backward compatible. The citadel-init walkthrough prompts for it with `citadel` pre-filled and omits the field from the generated YAML when the default is accepted.

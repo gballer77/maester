@@ -159,7 +159,7 @@ Not applicable as commercial growth strategy.
 
 As an open source project, growth should focus on:
 
-- Clear setup through `npx maester`.
+- Clear setup through `npx baller-maester`.
 - Useful defaults for common Git repository workflows.
 - Good examples for Maester and Maester configuration.
 - Agent skill integrations that make the aggregated repository more valuable.
@@ -238,7 +238,7 @@ Current focus should be defining the core product model and first CLI flow:
 
 - maester (source repository) configuration.
 - citadel (central repository) configuration.
-- Node package distribution through `npx maester` or similar.
+- Node package distribution through `npx baller-maester` or similar.
 - Basic scripts for checking updates and pulling configured docs.
 - Clear examples that demonstrate a complete source-to-central aggregation workflow.
 

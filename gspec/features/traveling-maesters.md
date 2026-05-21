@@ -164,7 +164,7 @@ spec-version: v1
 
 - [x] **P0**: MCP server registrations are written into each supported host platform's project-level MCP config
   - Per-host writers exist for at least: **Claude Code**, **Codex CLI**, and **Cursor** (the same three named-skill targets carried by [Grand Maester Skill](grand-maester-skill.md))
-  - Each writer knows its host's documented file path and entry shape and writes a managed `maester` entry that points at `maester mcp` (or the equivalent invocation form, e.g. `npx maester mcp`)
+  - Each writer knows its host's documented file path and entry shape and writes a managed `maester` entry that points at `maester mcp` (or the equivalent invocation form, e.g. `npx baller-maester mcp`)
   - Writers use a managed-region convention so user-authored MCP entries outside the maester block are preserved
   - Writers are idempotent — running registration twice produces byte-identical files
   - The Generic `AGENTS.md` target is **not** an MCP target (no MCP config to write); its installed artifact instead documents the fallback CLI surface (see the fallback-CLI capability below)

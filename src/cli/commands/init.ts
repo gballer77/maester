@@ -126,7 +126,7 @@ export async function runInit(ctx: CliContext): Promise<number> {
 
     await maybeInstallSkill(ctx, baseDir ?? DEFAULT_BASE_DIR);
 
-    ctx.prompts.outro("Next: run `npx maester sync` to fetch your sources.");
+    ctx.prompts.outro("Next: run `npx baller-maester sync` to fetch your sources.");
     return 0;
   } catch (err) {
     if (err instanceof PromptCancelledError) {

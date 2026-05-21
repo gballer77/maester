@@ -8,7 +8,7 @@ spec-version: v1
 
 **Feature name:** Config Editing
 
-**Summary:** Three verbs — `add`, `remove`, `list` — that let a user incrementally modify an already-configured `citadel.yaml` or `maester.yaml` through the same interactive wizard used during initialization, instead of opening the file in an editor. Reachable from both the `npx maester` top-level menu (when a config exists) and as direct subcommands.
+**Summary:** Three verbs — `add`, `remove`, `list` — that let a user incrementally modify an already-configured `citadel.yaml` or `maester.yaml` through the same interactive wizard used during initialization, instead of opening the file in an editor. Reachable from both the `npx baller-maester` top-level menu (when a config exists) and as direct subcommands.
 
 **Problem being solved:** Today, the citadel-init and maester-publish flows are one-shot wizards: they refuse to run when their target file already exists, leaving the user with no option but to hand-edit YAML to register a new source, remove an old one, or audit what is currently declared. Hand-editing is error-prone — typos in source names, malformed `includes` entries, ambiguous state values, missing fields, and unintentional schema-version drift all surface only at sync time. Config-editing verbs reuse the same prompts, validators, and idempotency rules that already power init/publish, so the user gets the same guard-rails they had during first-time setup.
 
@@ -24,7 +24,7 @@ spec-version: v1
 2. **Add a document to an existing maester.** A user in a maester-configured repo runs the publish-add verb and registers an additional document, including state and optional metadata.
 3. **Remove a stale entry.** A user removes a source that has been retired (or a document that no longer exists) by picking it from a list of current entries and confirming.
 4. **Audit what's currently declared.** A user runs the list verb to see every source / document in the current config, with its key metadata, without opening the YAML file.
-5. **Discover edit verbs from the top-level menu.** A user runs `npx maester` in a repo that already has a config and sees the edit verbs offered as menu options instead of the existing "already configured — exit" landing state.
+5. **Discover edit verbs from the top-level menu.** A user runs `npx baller-maester` in a repo that already has a config and sees the edit verbs offered as menu options instead of the existing "already configured — exit" landing state.
 
 ## 3. Scope
 
@@ -32,7 +32,7 @@ spec-version: v1
 - An `add` verb for each role that opens the same per-entry wizard used by init/publish and appends a single new entry to the existing config, applying every validator already enforced during initialization (name uniqueness, path shape, URL shape, env-var-name heuristics, destination collision detection)
 - A `remove` verb for each role that lists current entries, lets the user pick one by name (citadel sources) or path (maester documents), and removes it after explicit confirmation
 - A `list` verb for each role that renders the current entries with their key metadata
-- Top-level menu integration: when `npx maester` is run in a repo that already has a citadel or maester config, the menu offers the edit verbs for that role alongside any existing "configured" options
+- Top-level menu integration: when `npx baller-maester` is run in a repo that already has a citadel or maester config, the menu offers the edit verbs for that role alongside any existing "configured" options
 - Direct subcommand surface: `maester add`, `maester remove`, `maester list` operate on the citadel; `maester publish add`, `maester publish remove`, `maester publish list` operate on the maester
 - Atomic file writes — failed wizards (cancellation, validation rejection, crash) leave the existing config untouched
 - Preservation of the schema/version marker and any top-level fields the verb does not modify (e.g. `baseDir` on the citadel) on every write
@@ -88,8 +88,8 @@ spec-version: v1
   - The wizard surfaces a warning when it encounters an unrecognized top-level field rather than dropping it
 
 - [ ] **P0**: Top-level menu in an already-configured repo surfaces edit verbs
-  - When `npx maester` runs in a repo with `citadel.yaml`, the menu offers Add Source / Remove Source / List Sources entries for that role
-  - When `npx maester` runs in a repo with `maester.yaml`, the menu offers Add Document / Remove Document / List Documents entries for that role
+  - When `npx baller-maester` runs in a repo with `citadel.yaml`, the menu offers Add Source / Remove Source / List Sources entries for that role
+  - When `npx baller-maester` runs in a repo with `maester.yaml`, the menu offers Add Document / Remove Document / List Documents entries for that role
   - When both roles are configured, the menu groups verbs by role with clear labels and offers all six
   - Existing "already configured" landing options (view path, exit) remain available alongside the edit verbs
 

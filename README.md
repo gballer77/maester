@@ -21,7 +21,7 @@ A directory can hold one role, the other, or both. There is at most one of each 
 
 ### Where do the files land?
 
-**Every maester command uses the current working directory as the root.** When you run `npx maester init` from a directory, `citadel.yaml` is created in that exact directory — never in an ancestor. The same goes for `npx maester publish` (writes `maester.yaml` here), `npx maester sync` (reads `citadel.yaml` from here), and the interactive menu (`npx maester`).
+**Every maester command uses the current working directory as the root.** When you run `npx baller-maester init` from a directory, `citadel.yaml` is created in that exact directory — never in an ancestor. The same goes for `npx baller-maester publish` (writes `maester.yaml` here), `npx baller-maester sync` (reads `citadel.yaml` from here), and the interactive menu (`npx baller-maester`).
 
 If you run a maester command from the wrong directory, `cd` to the intended directory and re-run. The CLI does not walk upward to find a project root, so a stray `.git/` or `package.json` in a parent directory will not pull configuration files away from where you typed the command.
 
@@ -30,15 +30,15 @@ If you run a maester command from the wrong directory, `cd` to the intended dire
 In the directory you want to populate with aggregated knowledge:
 
 ```sh
-npx maester              # interactive menu (uses cwd as root)
-npx maester init         # citadel walkthrough — creates ./citadel.yaml
-npx maester sync         # fetch all configured sources — reads ./citadel.yaml
+npx baller-maester              # interactive menu (uses cwd as root)
+npx baller-maester init         # citadel walkthrough — creates ./citadel.yaml
+npx baller-maester sync         # fetch all configured sources — reads ./citadel.yaml
 ```
 
 In a directory that *publishes* docs to other citadels:
 
 ```sh
-npx maester publish      # maester manifest walkthrough — creates ./maester.yaml
+npx baller-maester publish      # maester manifest walkthrough — creates ./maester.yaml
 ```
 
 ## Pulling from sources you don't own
@@ -67,7 +67,7 @@ sources:
     description: Upstream React documentation snapshot.
 ```
 
-`npx maester sync` processes every source in one pass. The trade-off for the includes-driven mode: when the remote repo restructures, the citadel's `includes` may need to be updated. Sync prints a warning when an includes-driven source resolves to zero files so drift is visible.
+`npx baller-maester sync` processes every source in one pass. The trade-off for the includes-driven mode: when the remote repo restructures, the citadel's `includes` may need to be updated. Sync prints a warning when an includes-driven source resolves to zero files so drift is visible.
 
 ## Prerequisites
 
