@@ -71,56 +71,56 @@ spec-version: v1
 
 ## 4. Capabilities
 
-- [ ] **P0**: Codex MCP writer seeds `env_vars` with every connector-declared env-var name
+- [x] **P0**: Codex MCP writer seeds `env_vars` with every connector-declared env-var name
   - Reading `citadel.yaml`, the writer collects each connector's `auth.envVar` (where `auth.type === "token"`), de-duplicates the set, stable-sorts it, and emits `env_vars = ["NAME1", "NAME2", ...]` inside `[mcp_servers.maester]` in `.codex/config.toml`.
   - An empty set emits an empty array or omits the key — the writer picks one deterministically so the output is identical across runs.
   - When `auth.type === "none"` (or `auth` is omitted), the connector contributes nothing to the set.
   - Names that fail the framework's `ENV_VAR_RE` validation are dropped from the emitted set, a stderr warning names the offending connector + name, and the rest of the set is written.
   - The writer remains idempotent — running it twice in a row produces byte-identical files.
 
-- [ ] **P0**: Claude Code MCP writer seeds `env` with `${VAR:-}` placeholders for every connector-declared env-var name
+- [x] **P0**: Claude Code MCP writer seeds `env` with `${VAR:-}` placeholders for every connector-declared env-var name
   - The writer emits an `env` object inside the `mcpServers.maester` block (either `.mcp.json` for project scope or `~/.claude.json` for user/local scope, matching wherever the existing writer puts the maester block) where each key is a connector-derived env-var name and each value is the literal string `${VAR:-}` (with `VAR` substituted by the actual name).
   - The `:-` empty-default form is used so an unset env var on the user's machine does not cause Claude Code to fail to parse the whole `.mcp.json` (Claude Code hard-fails the config when a required `${VAR}` has no default).
   - The writer is idempotent — re-running it produces byte-identical files when neither the citadel nor the existing file contents have changed.
   - When the connector-derived set is empty, the writer leaves the `env` block untouched if it already exists with user-added entries, or omits it entirely if no user-added entries are present.
 
-- [ ] **P0**: Cursor writer is unchanged for connector-derived env vars
+- [x] **P0**: Cursor writer is unchanged for connector-derived env vars
   - The Cursor MCP writer does not emit any connector-derived names into `mcp.json`'s `env` block (no `${env:VAR}` substitution, no literal-value injection).
   - Cursor inherits env vars from its parent process and forwards them to the MCP subprocess; this remains the documented contract for Cursor users.
   - The writer remains idempotent and continues to preserve any user-added entries already present in the file.
 
-- [ ] **P0**: User-added env entries are preserved across refreshes (union semantics)
+- [x] **P0**: User-added env entries are preserved across refreshes (union semantics)
   - For Codex: any entry in the existing `env_vars` array that is not in the current framework-managed set survives the next refresh, joined to the framework-managed names, de-duplicated, and stable-sorted.
   - For Claude Code: any key in the existing `env` object that is not in the current framework-managed set survives the next refresh with its existing value intact. Framework-managed keys are overwritten with the `${VAR:-}` placeholder.
   - For Cursor: any user-added entries inside the existing `env` block are preserved (the writer does not write its own connector-derived names, but it does not erase existing ones either).
   - De-duplication is case-sensitive (matches the regex's case-sensitivity).
 
-- [ ] **P0**: Removing a connector strips its env-var name on the next refresh
+- [x] **P0**: Removing a connector strips its env-var name on the next refresh
   - When the last connector that referenced a given env-var name is removed from `citadel.yaml`, the next refresh removes that name from the framework-managed subset in every host's MCP block.
   - User-added entries (per the previous capability) are not stripped.
   - The `maester connector remove` flow's existing post-removal refresh triggers this behavior — no new code path is introduced.
 
-- [ ] **P0**: Refresh hooks into the existing trigger points without introducing new ones
+- [x] **P0**: Refresh hooks into the existing trigger points without introducing new ones
   - `maester init`, `maester connector add`, `maester connector remove`, and Grand Maester skill install/upgrade all already call `refreshMcpRegistrations`. This feature's logic lives inside the per-host writers those calls invoke; no new public command or new refresh trigger is added.
   - When `refreshMcpRegistrations` runs with a `scopeTo` filter (per the existing API), only the in-scope hosts' env lists are updated.
 
-- [ ] **P0**: No env-var values are ever written to any file the writer produces
+- [x] **P0**: No env-var values are ever written to any file the writer produces
   - The writer never reads `process.env[name]` for any connector-derived env-var name.
   - The writer never inlines a token value into Codex's `env_vars`, Claude Code's `env`, or Cursor's `env`.
   - The "names only, no values" invariant is the same one [Traveling Maesters](traveling-maesters.md) commits to for the citadel config; this feature extends it to MCP-host artifacts.
 
-- [ ] **P1**: Grand Maester Cursor artifact lists required env-var names
+- [x] **P1**: Grand Maester Cursor artifact lists required env-var names
   - When the Grand Maester skill installs (or upgrades) for the Cursor target on a citadel with one or more token-auth connectors, the installed artifact gains a short, fixed-shape note inside its managed region listing the required env-var names and instructing the user to export them in the shell that launches Cursor.
   - When the citadel has no connectors (or only `auth.type === "none"` connectors), the note is omitted.
   - The note is regenerated on every install/upgrade, so adding or removing a connector causes the next skill refresh to update the list.
   - Other targets (Claude Code, Codex, Generic AGENTS.md) do not get this note — Codex and Claude Code seed the names in the MCP config directly, and the AGENTS.md target is not an MCP host.
 
-- [ ] **P1**: Writer output is diff-friendly across refreshes
+- [x] **P1**: Writer output is diff-friendly across refreshes
   - The emitted env list (whatever the host's native shape) is stable-sorted so two refreshes with the same inputs produce byte-identical files.
   - When the citadel changes only the order of connector entries (not the set of `auth.envVar` names), the writer's output does not change.
   - When a connector is renamed but its `auth.envVar` is unchanged, the writer's emitted env list does not change.
 
-- [ ] **P1**: Writer surfaces actionable diagnostics on failure
+- [x] **P1**: Writer surfaces actionable diagnostics on failure
   - A connector whose `auth.envVar` fails the framework's regex validation triggers a stderr warning naming the connector and the offending value; the rest of the set is still written. The warning is one short line per offender, not a stack trace.
   - A host config file that exists but cannot be parsed (corrupt TOML/JSON) causes the writer for that host to return `action: "failed"` with the parser's message; other hosts' refresh continues independently.
 

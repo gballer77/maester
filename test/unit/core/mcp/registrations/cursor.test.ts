@@ -47,4 +47,42 @@ describe("writeCursorMcpEntry", () => {
     expect(parsed.mcpServers.vendor).toEqual({ command: "x" });
     expect(parsed.mcpServers.maester).toBeDefined();
   });
+
+  it("never injects connector env-var names into the env block (Cursor has no working pass-through)", async () => {
+    // Even though connectorEnvVars would be passed to other writers, the
+    // Cursor adapter discards them — it always sends an empty managed set to
+    // the shared JSON writer. The user is instead steered via the Cursor
+    // Grand Maester artifact's required-env-vars note.
+    await writeCursorMcpEntry(repoRoot, { launch, connectorEnvVars: ["GITLAB_TOKEN"] });
+    const parsed = JSON.parse(
+      await fs.readFile(path.join(repoRoot, ".cursor", "mcp.json"), "utf8"),
+    );
+    expect(parsed.mcpServers.maester.env).toBeUndefined();
+  });
+
+  it("preserves user-added env entries in .cursor/mcp.json on refresh", async () => {
+    await fs.mkdir(path.join(repoRoot, ".cursor"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, ".cursor", "mcp.json"),
+      `${JSON.stringify(
+        {
+          mcpServers: {
+            maester: { command: "old", args: [], env: { MY_DEBUG: "1" } },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await writeCursorMcpEntry(repoRoot, { launch });
+    const parsed = JSON.parse(
+      await fs.readFile(path.join(repoRoot, ".cursor", "mcp.json"), "utf8"),
+    );
+    expect(parsed.mcpServers.maester).toEqual({
+      command: "/fake/path/to/maester",
+      args: ["mcp"],
+      env: { MY_DEBUG: "1" },
+    });
+  });
 });

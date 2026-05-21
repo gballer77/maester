@@ -55,4 +55,37 @@ describe("cursorTarget.write", () => {
     const text = await fs.readFile(path.join(repoRoot, rulePath), "utf8");
     expect(text).toContain("v=0.2.0");
   });
+
+  it("surfaces required env-var names from citadel.yaml in the installed rule", async () => {
+    await fs.writeFile(
+      path.join(repoRoot, "citadel.yaml"),
+      [
+        "schemaVersion: 1",
+        "sources:",
+        "  - name: src",
+        "    url: https://github.com/x/y",
+        "connectors:",
+        "  - name: gl",
+        "    type: gitlab-issues",
+        "    auth:",
+        "      type: token",
+        "      envVar: GITLAB_TOKEN",
+        "    config:",
+        "      project: g/p",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await cursorTarget.write(input());
+    const text = await fs.readFile(path.join(repoRoot, rulePath), "utf8");
+    expect(text).toMatch(/Required environment variables \(Cursor\)/);
+    expect(text).toMatch(/`GITLAB_TOKEN`/);
+  });
+
+  it("omits the env-var note when citadel.yaml has no token-auth connectors", async () => {
+    // No citadel.yaml at all → no note.
+    await cursorTarget.write(input());
+    const text = await fs.readFile(path.join(repoRoot, rulePath), "utf8");
+    expect(text).not.toMatch(/Required environment variables \(Cursor\)/);
+  });
 });

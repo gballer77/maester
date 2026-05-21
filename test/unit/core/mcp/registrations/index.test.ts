@@ -54,6 +54,48 @@ describe("refreshMcpRegistrations", () => {
     expect(outcomes).toEqual([]);
     expect(await fileExists(path.join(repoRoot, ".mcp.json"))).toBe(false);
   });
+
+  it("seeds connector env-vars from citadel.yaml into Codex and Claude Code, but not Cursor", async () => {
+    await writeCitadelWithConnector(repoRoot, "GITLAB_TOKEN");
+    await refreshMcpRegistrations(repoRoot, {
+      scopeTo: ["codex", "claude-code", "cursor"],
+    });
+
+    const codex = await readCodexMaester(repoRoot);
+    expect(codex.env_vars).toEqual(["GITLAB_TOKEN"]);
+
+    const cc = await readJsonMaester(path.join(repoRoot, ".mcp.json"));
+    expect(cc.env).toEqual({ GITLAB_TOKEN: "${GITLAB_TOKEN:-}" });
+
+    const cursor = await readJsonMaester(path.join(repoRoot, ".cursor", "mcp.json"));
+    expect(cursor.env).toBeUndefined();
+  });
+
+  it("does not break refresh when citadel.yaml is missing", async () => {
+    const outcomes = await refreshMcpRegistrations(repoRoot, { scopeTo: ["codex"] });
+    expect(outcomes[0]?.action).toBe("written");
+    const codex = await readCodexMaester(repoRoot);
+    expect(codex.env_vars).toBeUndefined();
+  });
+
+  it("produces byte-identical files when connector ordering is reshuffled", async () => {
+    await writeCitadelWithConnectors(repoRoot, [
+      { name: "a", env: "ZZZ_TOKEN" },
+      { name: "b", env: "AAA_TOKEN" },
+    ]);
+    await refreshMcpRegistrations(repoRoot, { scopeTo: ["codex"] });
+    const first = await fs.readFile(path.join(repoRoot, ".codex", "config.toml"), "utf8");
+
+    // Same set of env vars but declared in a different order — output must be identical.
+    await writeCitadelWithConnectors(repoRoot, [
+      { name: "b", env: "AAA_TOKEN" },
+      { name: "a", env: "ZZZ_TOKEN" },
+    ]);
+    await refreshMcpRegistrations(repoRoot, { scopeTo: ["codex"] });
+    const second = await fs.readFile(path.join(repoRoot, ".codex", "config.toml"), "utf8");
+
+    expect(second).toBe(first);
+  });
 });
 
 async function fileExists(p: string): Promise<boolean> {
@@ -63,4 +105,50 @@ async function fileExists(p: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+async function writeCitadelWithConnector(repoRoot: string, envVar: string): Promise<void> {
+  await writeCitadelWithConnectors(repoRoot, [{ name: "gl", env: envVar }]);
+}
+
+async function writeCitadelWithConnectors(
+  repoRoot: string,
+  entries: readonly { name: string; env: string }[],
+): Promise<void> {
+  const lines = [
+    "schemaVersion: 1",
+    "sources:",
+    "  - name: src",
+    "    url: https://github.com/x/y",
+    "connectors:",
+  ];
+  for (const e of entries) {
+    lines.push(
+      `  - name: ${e.name}`,
+      "    type: gitlab-issues",
+      "    auth:",
+      "      type: token",
+      `      envVar: ${e.env}`,
+      "    config:",
+      "      project: g/p",
+    );
+  }
+  await fs.writeFile(path.join(repoRoot, "citadel.yaml"), `${lines.join("\n")}\n`, "utf8");
+}
+
+async function readCodexMaester(repoRoot: string): Promise<Record<string, unknown>> {
+  const { default: TOML } = await import("@iarna/toml");
+  const text = await fs.readFile(path.join(repoRoot, ".codex", "config.toml"), "utf8");
+  const parsed = TOML.parse(text) as {
+    mcp_servers: { maester: Record<string, unknown> };
+  };
+  return parsed.mcp_servers.maester;
+}
+
+async function readJsonMaester(p: string): Promise<Record<string, unknown>> {
+  const text = await fs.readFile(p, "utf8");
+  const parsed = JSON.parse(text) as {
+    mcpServers: { maester: Record<string, unknown> };
+  };
+  return parsed.mcpServers.maester;
 }

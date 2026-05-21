@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-21
+
+### Added
+- **Connector env-var seeding into MCP host registrations.** The Codex CLI writer now emits `env_vars = ["NAME", ...]` inside `[mcp_servers.maester]` (Codex's native shell pass-through). The Claude Code writer now emits an `env` block under `mcpServers.maester` with `"NAME": "${NAME:-}"` placeholders (Claude Code's native `${VAR}` expansion; the `:-` empty-default form prevents `.mcp.json` parse failures when a var is unset). Cursor — which has no working config-file pass-through — relies on its parent-process env inheritance instead; the installed Grand Maester Cursor rule now lists the required env-var names so users know what to export in the shell that launches Cursor. Closes the gap where a connector configured with `auth: { type: "token", envVar: "GITLAB_TOKEN" }` failed every tool call with `missing-env-var` even when the user had exported the variable in their shell.
+- **Union semantics for the maester block.** The framework owns the set of env-var names derived from `citadel.connectors[*].auth.envVar` and persists a small `_maester_managed_env_vars` (Codex) / `_maesterManagedEnv` (Claude Code) marker so the next refresh can distinguish framework-managed entries (which should be stripped when no connector still references them) from user-added entries (which are preserved verbatim across refreshes). De-duped and stable-sorted so output is byte-identical between refreshes. No env-var values are ever written to any file maester produces — names only.
+
 ## [0.4.2] - 2026-05-21
 
 ### Changed

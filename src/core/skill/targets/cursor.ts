@@ -1,5 +1,6 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { loadConnectorEnvVarsBestEffort } from "../../mcp/registrations/env-vars.js";
 import { extractMarkdownRegion, replaceMarkdownRegion } from "../managed-region.js";
 import { renderCursorRuleBody, renderCursorRuleFile } from "../templates/shells/cursor.js";
 import type { SkillAction, SkillTarget, SkillWriteInput, SkillWriteOutcome } from "../types.js";
@@ -20,7 +21,15 @@ async function writeCursor(input: SkillWriteInput): Promise<SkillWriteOutcome> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const existing = await readTextOrUndefined(filePath);
   const previousVersion = existing ? extractMarkdownRegion(existing)?.version : undefined;
-  const body = renderCursorRuleBody({ baseDir: input.citadelBaseDir });
+  // Surface required env-var names in the artifact so Cursor users know what
+  // to export — Cursor's mcp.json has no working pass-through, so it relies on
+  // the parent shell. Best-effort load: a missing/invalid citadel just yields
+  // an empty list and the section is omitted.
+  const envVars = await loadConnectorEnvVarsBestEffort(input.repoRoot);
+  const body = renderCursorRuleBody({
+    baseDir: input.citadelBaseDir,
+    requiredEnvVars: envVars.managed,
+  });
   const next = existing
     ? replaceMarkdownRegion(existing, body, input.skillVersion)
     : `${renderCursorRuleFile(
