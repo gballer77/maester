@@ -93,7 +93,7 @@ spec-version: v1
 - [x] **P0**: Installed artifacts encode canon-preferring, draft-tolerant state awareness
   - The artifacts instruct the host agent to treat files whose resolved state is `canon` as authoritative when answering
   - `draft` files are surfaced as informational context only — the agent may cite them but must mark them as draft when doing so
-  - State is read inline from each file using the conventions defined by [Document State Tagging](document-state-tagging.md); the agent is told to look there and is not expected to consult any external index
+  - State is read inline from each file using the conventions defined by [Document State Tagging](document-state-tagging.md); inline state is authoritative even when a generated catalog (see [Citadel Index](citadel-index.md)) disagrees
   - When an answer cites a draft file, the cited material is presented alongside the file's `state` so the developer can tell
 
 - [x] **P0**: Installed artifacts encode freshness awareness via a pre-read status check
@@ -157,7 +157,7 @@ spec-version: v1
 **Assumptions:**
 - Each named target agent in v1 (Claude Code, Codex CLI, Cursor) has a stable, documented integration surface for project-level instructions. At least two of them — Claude Code (via `.claude/skills/<name>/SKILL.md`) and Codex CLI (via `.agents/skills/<name>/SKILL.md`) — additionally support a named-skill mechanism with implicit invocation driven by a `SKILL.md` description field. Claude Code further supports hook-style runtime automation; Codex CLI does not currently expose a pre-tool hook, so its skill relies on the description to trigger and on instruction text for runtime behavior. The generic `AGENTS.md` target is a fallback for agents that read project instructions in a standard Markdown file but offer no named-skill surface.
 - The citadel base directory and per-source layout are stable enough that instruction text can reference them by convention rather than by introspection. Layout changes that would break the instructions are handled by upgrading installed artifacts via the standalone command.
-- Inline state from [Document State Tagging](document-state-tagging.md) is the primary, file-local signal an agent needs to apply the canon-over-draft policy. No external state index is required.
+- Inline state from [Document State Tagging](document-state-tagging.md) is the primary, file-local signal an agent needs to apply the canon-over-draft policy. The generated catalog from [Citadel Index](citadel-index.md) is an orientation aid, not the source of truth for state.
 - The citadel repository is the right place to commit the installed artifacts — they belong to the project, not the individual developer's machine.
 - The user's host agent is responsible for honoring the installed instructions; the Grand Maester does not police agent behavior, only encodes the intended behavior in the agent's native integration surface.
 

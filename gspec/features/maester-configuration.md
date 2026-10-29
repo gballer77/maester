@@ -106,6 +106,11 @@ implementation-order: 3
   - Final stdout (styled via the shared CLI layer) reports: where the manifest was written, how many entries it contains, and a reminder that consuming citadels will pick up the manifest at their next sync
   - Exit code is zero on success and non-zero on user cancellation or error
 
+- [ ] **P1**: User can describe the maester as a whole
+  - The manifest accepts an optional top-level description (short free-text) and optional top-level tags (zero or more short identifiers)
+  - The walkthrough offers both as optional prompts before collecting document entries; skipping them leaves the manifest valid
+  - Consuming citadels use these values as the source-level description and tags when the citadel entry does not override them (see [Citadel Index](citadel-index.md))
+
 - [x] **P2**: Walkthrough offers lightweight suggestions for common publish patterns
   - When the repo root contains a `README.md`, the walkthrough offers it as a one-click default entry
   - Suggestions are additive; the user can always decline and enter paths manually
