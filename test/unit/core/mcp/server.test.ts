@@ -71,4 +71,29 @@ connectors:
       await result.server.close();
     }
   });
+
+  it("adds the two linked-document tools only when a link-mode destination exists", async () => {
+    await writeCitadelYamlWithConnector();
+    const dest = path.join(repoRoot, "citadel/docs");
+    await fs.mkdir(dest, { recursive: true });
+    await fs.writeFile(
+      path.join(dest, ".maester-source.json"),
+      JSON.stringify({
+        markerVersion: 2,
+        kind: "path",
+        sourceName: "docs",
+        sourcePath: "../docs",
+        fingerprint: "sha256:x",
+        mode: "link",
+        filterSet: ["**"],
+      }),
+      "utf8",
+    );
+    const result = await bootMcpServer(repoRoot, "0.0.0-test");
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.toolCount).toBe(5);
+      await result.server.close();
+    }
+  });
 });

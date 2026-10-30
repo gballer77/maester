@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { Source } from "../../schemas/citadel.js";
+import type { GitSource } from "../../schemas/citadel.js";
 import { CACHE_DIR_NAME } from "../config/paths.js";
 import { MaesterError } from "../errors.js";
 import {
@@ -31,7 +31,7 @@ export type ManifestProbeResult = {
   excludes?: readonly string[];
 };
 
-export async function probeCommitSha(source: Source, ctx: ProbeContext): Promise<string> {
+export async function probeCommitSha(source: GitSource, ctx: ProbeContext): Promise<string> {
   if (source.ref && SHA_RE.test(source.ref)) {
     return source.ref;
   }
@@ -43,7 +43,7 @@ export async function probeCommitSha(source: Source, ctx: ProbeContext): Promise
 }
 
 export async function probeManifest(
-  source: Source,
+  source: GitSource,
   ctx: ProbeContext,
 ): Promise<ManifestProbeResult> {
   const tempRoot = resolve(ctx.repoRoot, CACHE_DIR_NAME);

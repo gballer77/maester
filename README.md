@@ -91,6 +91,33 @@ Narrow it further with `excludes` on the source:
 
 `excludes` only applies in whole-repository mode; on an includes- or manifest-driven source sync warns that it was ignored.
 
+## Local directories as sources
+
+A source can point at a directory on this machine with `path:` instead of `url:`. There is no git, cache, or network involved. Use it for sibling checkouts, notes folders, or anything you are editing locally.
+
+```yaml
+sources:
+  # Linked (default): symlinks to the live files, gitignored, machine-specific.
+  - name: platform-docs
+    path: ../platform-docs          # repo-relative, absolute, ~/…, or ${ENV_VAR}/…
+
+  # Copied: a committable snapshot, refreshed on each sync.
+  - name: handbook
+    path: ${HANDBOOK_HOME}
+    mode: copy
+    includes:
+      - "**/*.md"
+```
+
+- **Filter set:** chosen exactly as for git sources: `includes`, then the directory's `maester.yaml`, then the whole directory (always linked; `mode: copy` without declared paths fails that source).
+- **Link mode:** one symlink per file. Targets are relative when `path` is repo-relative and absolute otherwise. Edits show through immediately; adding or removing files needs a `maester sync`. The destination is added to `.gitignore`.
+- **Copy mode:** copies only the resolved files and applies inline state like a git source. It is safe to commit.
+- **Guards:** a `path` may not sit inside, or contain, the citadel's base directory or any destination. `ref` and `auth` are rejected on path sources. A missing directory or unset `${VAR}` fails only that source.
+- **Status:** never touches the network. It reports `local-changed` when the files differ from the last sync and `failed` / `source-missing` when the directory or a linked original is gone.
+- **Agents that will not follow symlinks** can use the MCP tools `citadel__list_linked_documents` and `citadel__read_linked_document`. They are registered whenever the citadel has a linked destination. `citadel` is therefore a reserved connector name.
+
+`maester init` asks "Git repository or local directory?" for each source.
+
 ## Prerequisites
 
 - **Node.js** ≥ 24 LTS

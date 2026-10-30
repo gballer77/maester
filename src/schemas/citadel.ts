@@ -1,6 +1,12 @@
 import { resolve } from "node:path";
 import { z } from "zod";
 import { lookupConnectorType } from "../core/connectors/registry.js";
+import {
+  checkPathOverlap,
+  expandSourcePathLexically,
+  isRelativeDeclaration,
+  malformedPlaceholder,
+} from "../core/sources/local-path.js";
 import { StateSchema } from "../core/state/schema.js";
 
 export const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
@@ -76,7 +82,14 @@ export const SourceSchema = z
       .string()
       .min(1)
       .regex(SLUG_RE, "name must be a kebab-case slug starting with a letter or digit"),
-    url: z.string().refine(isValidGitUrl, "url must be https://, ssh://, or git@host:path"),
+    // Exactly one of url / path; the pairing rules live in the citadel
+    // .superRefine so their errors can name the source.
+    url: z
+      .string()
+      .refine(isValidGitUrl, "url must be https://, ssh://, or git@host:path")
+      .optional(),
+    path: z.string().min(1, "path must not be empty").optional(),
+    mode: z.enum(["link", "copy"]).optional(),
     ref: z.string().min(1).optional(),
     includes: z
       .array(IncludeEntrySchema)
@@ -129,6 +142,73 @@ type ParsedCitadel = {
   connectors?: z.infer<typeof ConnectorBaseSchema>[];
 };
 
+const VALIDATION_ROOT = "/_citadel_root_";
+
+/** Prefix of the built-in linked-document MCP tools (`citadel__…`). */
+export const RESERVED_CONNECTOR_NAME = "citadel";
+
+/** Pairing rules for git (`url`) vs path (`path`) sources (Local Maesters P0). */
+function checkSourceKinds(
+  sources: readonly z.infer<typeof SourceSchema>[],
+  baseDir: string,
+  ctx: z.RefinementCtx,
+): void {
+  const destinations = sources.map((s) => {
+    const display = s.destination ?? `${baseDir}/${s.name}`;
+    return { name: s.name, path: resolve(VALIDATION_ROOT, display), display };
+  });
+  for (let i = 0; i < sources.length; i++) {
+    const entry = sources[i];
+    if (!entry) continue;
+    const issue = (message: string, field: string) =>
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: ["sources", i, field] });
+
+    if (entry.url !== undefined && entry.path !== undefined) {
+      issue(`source '${entry.name}' declares both url and path — keep exactly one`, "path");
+      continue;
+    }
+    if (entry.url === undefined && entry.path === undefined) {
+      issue(
+        `source '${entry.name}' needs a url (git repository) or a path (local directory)`,
+        "url",
+      );
+      continue;
+    }
+    if (entry.url !== undefined) {
+      if (entry.mode !== undefined) {
+        issue("`mode` applies only to path (local directory) sources", "mode");
+      }
+      continue;
+    }
+
+    const path = entry.path ?? "";
+    if (entry.ref !== undefined) issue("`ref` applies only to git (`url`) sources", "ref");
+    if (entry.auth !== undefined) issue("`auth` applies only to git (`url`) sources", "auth");
+    const bad = malformedPlaceholder(path);
+    if (bad) {
+      issue(
+        `source '${entry.name}' path has a malformed placeholder ${bad} — use \${NAME} with an uppercase env-var name`,
+        "path",
+      );
+      continue;
+    }
+    // Lexical overlap check for repo-relative paths only; absolute, ~ and
+    // ${VAR} paths are checked at run time after realpath().
+    if (isRelativeDeclaration(path)) {
+      const sourcePath = expandSourcePathLexically(entry.name, path, {
+        repoRoot: VALIDATION_ROOT,
+        env: {},
+      });
+      const overlap = checkPathOverlap(entry.name, path, sourcePath, {
+        baseDir: resolve(VALIDATION_ROOT, baseDir),
+        baseDirDisplay: baseDir,
+        destinations,
+      });
+      if (overlap) issue(overlap, "path");
+    }
+  }
+}
+
 function applyCombinedInvariants(data: ParsedCitadel, ctx: z.RefinementCtx): void {
   if (data.sources.length === 0) {
     ctx.addIssue({
@@ -140,6 +220,7 @@ function applyCombinedInvariants(data: ParsedCitadel, ctx: z.RefinementCtx): voi
   }
 
   const baseDir = data.baseDir ?? DEFAULT_BASE_DIR;
+  checkSourceKinds(data.sources, baseDir, ctx);
   const namesSeen = new Map<string, number>();
   const destsSeen = new Map<string, { index: number; name: string }>();
 
@@ -177,6 +258,14 @@ function applyCombinedInvariants(data: ParsedCitadel, ctx: z.RefinementCtx): voi
   for (let i = 0; i < connectors.length; i++) {
     const entry = connectors[i];
     if (!entry?.name) continue;
+
+    if (entry.name === RESERVED_CONNECTOR_NAME) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `connector name '${RESERVED_CONNECTOR_NAME}' is reserved for maester's built-in citadel tools`,
+        path: ["connectors", i, "name"],
+      });
+    }
 
     const priorIndex = connectorNames.get(entry.name);
     if (priorIndex !== undefined) {
@@ -230,5 +319,15 @@ export const CitadelConfigSchema = z
 export type AuthRef = z.infer<typeof AuthRefSchema>;
 export type IncludeEntry = z.infer<typeof IncludeEntrySchema>;
 export type Source = z.infer<typeof SourceSchema>;
+export type GitSource = Source & { url: string; path?: undefined };
+export type PathSource = Source & { path: string; url?: undefined };
+
+export function isPathSource(source: Source): source is PathSource {
+  return typeof source.path === "string";
+}
+
+export function isGitSource(source: Source): source is GitSource {
+  return typeof source.url === "string";
+}
 export type Connector = z.infer<typeof ConnectorBaseSchema>;
 export type CitadelConfig = z.infer<typeof CitadelConfigSchema>;

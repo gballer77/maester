@@ -10,7 +10,14 @@ import {
 } from "./provenance.js";
 
 export type StageInput<TApply = unknown> = {
+  /** Directory the content is copied from: a git cache or a path source's directory. */
   cacheDir: string;
+  /**
+   * Root-relative files to copy. When omitted the whole directory is copied
+   * (minus `.git`), which suits a sparse git cache; path sources pass their
+   * resolved file set so nothing outside it is copied.
+   */
+  files?: readonly string[];
   destination: string;
   marker: ProvenanceMarkerInput;
   /**
@@ -36,7 +43,8 @@ export async function stageDestination<TApply = unknown>(
   const tempDir = `${input.destination}.tmp-${Math.random().toString(36).slice(2, 10)}`;
   await mkdir(dirname(input.destination), { recursive: true });
   await mkdir(tempDir, { recursive: true });
-  await copyCacheToTemp(input.cacheDir, tempDir);
+  if (input.files) await copyFilesToTemp(input.cacheDir, input.files, tempDir);
+  else await copyCacheToTemp(input.cacheDir, tempDir);
   const beforePromoteResult = input.beforePromote ? await input.beforePromote(tempDir) : undefined;
   await writeProvenanceMarker(tempDir, input.marker);
   await promoteTempToDestination(tempDir, input.destination);
@@ -44,6 +52,18 @@ export async function stageDestination<TApply = unknown>(
     return { staged: true, finalPath: input.destination, beforePromoteResult };
   }
   return { staged: true, finalPath: input.destination };
+}
+
+async function copyFilesToTemp(
+  root: string,
+  files: readonly string[],
+  tempDir: string,
+): Promise<void> {
+  for (const file of files) {
+    const dst = resolve(tempDir, file);
+    await mkdir(dirname(dst), { recursive: true });
+    await cp(resolve(root, file), dst, { force: true, errorOnExist: false });
+  }
 }
 
 async function copyCacheToTemp(cacheDir: string, tempDir: string): Promise<void> {

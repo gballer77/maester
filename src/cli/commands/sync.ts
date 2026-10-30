@@ -91,9 +91,11 @@ export async function runSyncCommand(
 function buildJsonOutcome(outcome: SyncOutcome): Record<string, unknown> {
   const base: Record<string, unknown> = {
     name: outcome.name,
+    kind: outcome.kind,
     status: outcome.status,
     destination: outcome.destination,
   };
+  if (outcome.sourcePath !== undefined) base.sourcePath = outcome.sourcePath;
   if (outcome.ref !== undefined) base.ref = outcome.ref;
   if (outcome.commitSha !== undefined) base.commitSha = outcome.commitSha;
   if (outcome.mode !== undefined) base.mode = outcome.mode;
@@ -121,15 +123,16 @@ function serializeWarning(warning: SyncWarning): Record<string, unknown> {
 
 function renderHumanSummary(ctx: CliContext, result: SyncResult): void {
   for (const outcome of result.outcomes) {
-    const shortSha = outcome.commitSha?.slice(0, 7) ?? "—";
+    // Path sources have no commit; git sources always show one.
+    const sha = outcome.kind === "path" ? "" : ` (${outcome.commitSha?.slice(0, 7) ?? "—"})`;
     const stateSuffix = formatStateBreakdownSuffix(outcome);
-    const linked = outcome.mode === "link" ? " (linked)" : "";
+    const linked = modeLabel(outcome);
     switch (outcome.status) {
       case "added":
-        ctx.logger.success(`${outcome.name}: added (${shortSha})${linked}${stateSuffix}`);
+        ctx.logger.success(`${outcome.name}: added${sha}${linked}${stateSuffix}`);
         break;
       case "updated":
-        ctx.logger.success(`${outcome.name}: updated (${shortSha})${linked}${stateSuffix}`);
+        ctx.logger.success(`${outcome.name}: updated${sha}${linked}${stateSuffix}`);
         break;
       case "unchanged":
         ctx.logger.info(`${outcome.name}: unchanged${linked}`);
@@ -161,6 +164,13 @@ function renderHumanSummary(ctx: CliContext, result: SyncResult): void {
   ctx.logger.success(`All ${result.outcomes.length} source(s) up to date.`);
 }
 
+/** `(linked)` for any linked source; `(copied)` for copy-mode path sources only. */
+function modeLabel(outcome: SyncOutcome): string {
+  if (outcome.mode === "link") return " (linked)";
+  if (outcome.mode === "copy" && outcome.kind === "path") return " (copied)";
+  return "";
+}
+
 function renderWholeRepoLines(ctx: CliContext, outcome: SyncOutcome): void {
   if (outcome.filterMode === "whole-repository") {
     const why =
@@ -168,13 +178,17 @@ function renderWholeRepoLines(ctx: CliContext, outcome: SyncOutcome): void {
         ? "its maester.yaml lists no documents"
         : "it has no includes and no maester.yaml";
     const count = outcome.fileCount !== undefined ? ` (${outcome.fileCount} file(s))` : "";
-    ctx.logger.info(`  whole repository${count} — ${why}`);
+    const scope = outcome.kind === "path" ? "whole directory" : "whole repository";
+    const where = outcome.kind === "path" ? "in the directory" : "upstream";
+    ctx.logger.info(`  ${scope}${count} — ${why}`);
     ctx.logger.info(
-      "  narrow it with `excludes`, declare `includes`, or publish a maester.yaml upstream",
+      `  narrow it with \`excludes\`, declare \`includes\`, or publish a maester.yaml ${where}`,
     );
   }
   if (outcome.gitignoreEntry) {
-    ctx.logger.info(`  added ${outcome.gitignoreEntry} to .gitignore`);
+    ctx.logger.info(
+      `  added ${outcome.gitignoreEntry} to .gitignore — linked content is machine-specific`,
+    );
   }
   if (ctx.flags.verbose && outcome.skipped) {
     const { excluded, binary, oversize } = outcome.skipped;

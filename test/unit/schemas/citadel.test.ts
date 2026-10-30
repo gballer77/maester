@@ -506,3 +506,101 @@ describe("CitadelConfigSchema — connectors array", () => {
     expect(result.success).toBe(true);
   });
 });
+
+describe("CitadelConfigSchema: path sources", () => {
+  function parse(source: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+    return CitadelConfigSchema.safeParse({ schemaVersion: 1, sources: [source], ...extra });
+  }
+  function messages(result: ReturnType<typeof parse>): string {
+    return result.success ? "" : result.error.issues.map((i) => i.message).join("\n");
+  }
+
+  it.each(["../platform-docs", "/srv/docs", "~/notes", "${DOCS_HOME}/notes", "docs"])(
+    "accepts path %s",
+    (path) => {
+      expect(parse({ name: "notes", path }).success).toBe(true);
+    },
+  );
+
+  it("accepts mode link and copy on a path source", () => {
+    expect(parse({ name: "notes", path: "../notes", mode: "link" }).success).toBe(true);
+    expect(parse({ name: "notes", path: "../notes", mode: "copy" }).success).toBe(true);
+  });
+
+  it("rejects a source with both url and path, naming the source", () => {
+    const result = parse({ name: "notes", path: "../notes", url: "https://x.example/r.git" });
+    expect(messages(result)).toMatch(/source 'notes' declares both url and path/);
+  });
+
+  it("rejects a source with neither url nor path, naming the source", () => {
+    expect(messages(parse({ name: "notes" }))).toMatch(/source 'notes' needs a url .* or a path/);
+  });
+
+  it("rejects ref and auth on a path source", () => {
+    const result = parse({
+      name: "notes",
+      path: "../notes",
+      ref: "main",
+      auth: { type: "token", envVar: "TOKEN" },
+    });
+    expect(messages(result)).toMatch(/`ref` applies only to git/);
+    expect(messages(result)).toMatch(/`auth` applies only to git/);
+  });
+
+  it("rejects mode on a url source", () => {
+    const result = parse({ name: "r", url: "https://x.example/r.git", mode: "link" });
+    expect(messages(result)).toMatch(/`mode` applies only to path/);
+  });
+
+  it.each(["${lower}/x", "${DOCS/x", "${}/x"])("rejects malformed placeholder in %s", (path) => {
+    expect(messages(parse({ name: "notes", path }))).toMatch(/malformed placeholder/);
+  });
+
+  it("rejects a path inside the citadel base directory", () => {
+    expect(messages(parse({ name: "notes", path: "citadel/other" }))).toMatch(
+      /lies inside the citadel base directory citadel\//,
+    );
+  });
+
+  it("rejects a path inside another source's destination", () => {
+    const result = CitadelConfigSchema.safeParse({
+      schemaVersion: 1,
+      sources: [
+        { name: "api", url: "https://x.example/r.git", destination: "vendor/api" },
+        { name: "notes", path: "vendor/api/docs" },
+      ],
+    });
+    expect(messages(result)).toMatch(/overlaps destination vendor\/api\/ of source 'api'/);
+  });
+
+  it.each([".", ".."])("rejects %s because it contains the citadel output", (path) => {
+    expect(messages(parse({ name: "notes", path }))).toMatch(/contains the citadel base directory/);
+  });
+
+  it("honours a custom baseDir in the overlap check", () => {
+    expect(parse({ name: "notes", path: "citadel/notes" }, { baseDir: "kb" }).success).toBe(true);
+    expect(messages(parse({ name: "notes", path: "kb/x" }, { baseDir: "kb" }))).toMatch(
+      /base directory kb\//,
+    );
+  });
+});
+
+describe("CitadelConfigSchema: reserved connector name", () => {
+  let dispose: () => void;
+  beforeEach(() => {
+    dispose = __registerTestType(testConnectorType);
+  });
+  afterEach(() => dispose());
+
+  it("rejects a connector named 'citadel'", () => {
+    const result = CitadelConfigSchema.safeParse({
+      schemaVersion: 1,
+      sources: [{ name: "docs", url: "https://x.example/r.git" }],
+      connectors: [{ name: "citadel", type: TEST_CONNECTOR_TYPE_ID, config: { prefix: "x" } }],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((i) => i.message).join("\n")).toMatch(/is reserved/);
+    }
+  });
+});

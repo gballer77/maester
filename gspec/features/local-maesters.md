@@ -56,13 +56,13 @@ spec-version: v1
 
 ## 4. Capabilities
 
-- [ ] **P0**: User can declare a citadel source by local path
+- [x] **P0**: User can declare a citadel source by local path
   - The source schema accepts `path` as an alternative to `url`; exactly one of the two must be present, and a source with both or neither fails validation with a clear error naming the source
   - `path` accepts repo-relative and absolute forms; `~` and `${ENV_VAR}` are expanded at run time, and an unset referenced variable fails that source at run time with a message naming the variable (other sources continue)
   - `ref` and `auth` are rejected on a path source at validation time with a message explaining they apply only to git sources
   - `includes`, `destination`, `description`, and `tags` behave identically on path sources and url sources
 
-- [ ] **P0**: Path sources resolve their filter set the same way remote sources do
+- [x] **P0**: Path sources resolve their filter set the same way remote sources do
   - When the source has no `includes` and the directory contains a manifest with published entries, sync surfaces exactly the manifest's published set
   - When the directory has no manifest (or a manifest with no published entries) and no `includes` is set, the whole directory is surfaced per [Whole-Repository Sources](whole-repository-sources.md), including its built-in excludes and labelled output; whole-directory content is always linked
   - A source with `mode: copy` that resolves to whole-directory surfacing fails at sync time with a message explaining that copy mode requires `includes` or published manifest entries; other sources continue
@@ -70,57 +70,57 @@ spec-version: v1
   - When `includes` is set, it is authoritative and the manifest is not consulted
   - An includes-driven path source that matches zero files is reported with the existing "no files matched" warning and does not fail the run
 
-- [ ] **P0**: Link mode surfaces documents without copying them
+- [x] **P0**: Link mode surfaces documents without copying them
   - When `mode` is `link` (the default for path sources), the destination contains one link per resolved file, preserving the file's relative path within the source
   - Each link resolves to the original file from the destination's location on the same machine
   - Files that fall outside the resolved filter set are never linked; a single whole-directory link is not used
   - Re-running sync against an unchanged source and filter set produces no modifications in the destination and reports the source as `unchanged`
 
-- [ ] **P0**: Link-mode destinations are excluded from version control automatically
+- [x] **P0**: Link-mode destinations are excluded from version control automatically
   - On the first successful sync of a link-mode source, the destination path is added to the repository's ignore file if not already covered
   - The ignore entry is scoped to that destination only; other sources' destinations are unaffected
   - The sync output names the ignore entry it wrote so the user understands why the directory is not committed
 
-- [ ] **P0**: Copy mode mirrors a path source like a remote source
+- [x] **P0**: Copy mode mirrors a path source like a remote source
   - When `mode` is `copy`, the destination contains a byte-for-byte mirror of the resolved files and is safe to commit
   - Inline state, category, and tag resolution applies to copied files exactly as it does for remote sources
   - A second sync with no source changes produces no content modifications; a changed source file results in only the affected destination files being rewritten
   - Stale files from a previous sync of the same source are removed from the destination
 
-- [ ] **P0**: Path sources carry a provenance marker
+- [x] **P0**: Path sources carry a provenance marker
   - The marker records the resolved absolute source path, the mode, the active filter set, a content fingerprint of the resolved file set, and the sync timestamp
   - The marker is written on every successful sync of the source and is the basis for the `unchanged` verdict
   - The marker contains no secret values and, for copy mode, is safe to commit
 
-- [ ] **P0**: Path sources are protected against self-reference and output overlap
+- [x] **P0**: Path sources are protected against self-reference and output overlap
   - A `path` that resolves inside the citadel's base directory, or inside any configured destination, is rejected at validation time with a message naming the overlap
   - A `destination` that resolves inside the source `path` is rejected the same way
   - A `path` that does not exist or is not a directory fails that source at run time with a clear message; other sources continue
 
-- [ ] **P0**: Status reports meaningful verdicts for path sources
+- [x] **P0**: Status reports meaningful verdicts for path sources
   - A path source that has never been synced is reported as `behind` with reason `never-synced`, as for remote sources
   - A copy-mode source whose current content fingerprint differs from the recorded one is `behind` with reason `local-changed`
   - A link-mode source whose source directory is missing, or any of whose links no longer resolve, is reported as `failed` with reason `source-missing`
   - A manifest-driven path source whose manifest publish surface has changed since the recorded filter set is `behind` with reason `manifest-changed`
   - Status performs no network operations for path sources, and the exit-code rules of the status feature apply unchanged
 
-- [ ] **P1**: Init and the add-source wizard offer a local directory option
+- [x] **P1**: Init and the add-source wizard offer a local directory option
   - When registering a source, the user chooses between "git repository" and "local directory" before entering the location
   - Choosing local directory collects a path, validates that it exists and is a directory, and offers the `link` / `copy` choice with `link` pre-selected
   - A path with no manifest prompts for an `includes` list, mirroring the remote flow
   - The generated config entry round-trips through validation without edits
 
-- [ ] **P1**: Installed Grand Maester artifacts explain linked sources
+- [x] **P1**: Installed Grand Maester artifacts explain linked sources
   - The citadel-awareness instruction text states that some sources may be linked rather than mirrored, that their content reflects the live local files, and that a dangling link means the source has moved
   - The text does not enumerate individual sources
   - The install is otherwise unchanged for citadels that have no path sources
 
-- [ ] **P1**: Sync and status output distinguish path sources from remote sources
+- [x] **P1**: Sync and status output distinguish path sources from remote sources
   - Human-readable output labels each path source with its mode (`linked` / `copied`) alongside its name
   - Structured (`--json`) output includes the source kind (`git` / `path`), the mode, and the resolved source path
   - No secret values appear in either output mode
 
-- [ ] **P2**: Linked documents are reachable through the MCP server
+- [x] **P2**: Linked documents are reachable through the MCP server
   - When the citadel has at least one link-mode source, the MCP server exposes a tool to list that source's resolved documents and a tool to read one by its citadel-relative path
   - Reads return the current content of the original file
   - Tools are namespaced by source name, consistent with the existing connector tool-naming convention

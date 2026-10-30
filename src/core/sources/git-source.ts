@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { parseDocument } from "yaml";
-import type { Source } from "../../schemas/citadel.js";
+import type { GitSource } from "../../schemas/citadel.js";
 import { MaesterConfigSchema } from "../../schemas/maester.js";
 import { MaesterError } from "../errors.js";
 import {
@@ -32,6 +32,7 @@ export type FetchWarning =
   | { type: "excludes-ignored"; name: string; filterMode: "includes" | "manifest" };
 
 export type FetchedTree = {
+  kind: "git";
   name: string;
   cacheDir: string;
   commitSha: string;
@@ -57,7 +58,7 @@ type ManifestDiscovery =
   | { mode: "manifest"; patterns: string[]; rules: RuleEntry[] }
   | { mode: "no-manifest"; reason: "absent" | "invalid" };
 
-export async function fetchGitSource(entry: Source, ctx: FetchContext): Promise<FetchedTree> {
+export async function fetchGitSource(entry: GitSource, ctx: FetchContext): Promise<FetchedTree> {
   const includesDriven = hasExplicitIncludes(entry);
   await ensureCache(entry, ctx, !includesDriven);
 
@@ -78,6 +79,7 @@ export async function fetchGitSource(entry: Source, ctx: FetchContext): Promise<
         resolution.excludes,
       );
       return {
+        kind: "git",
         name: entry.name,
         cacheDir: ctx.cacheDir,
         commitSha,
@@ -104,6 +106,7 @@ export async function fetchGitSource(entry: Source, ctx: FetchContext): Promise<
         }
       }
       return {
+        kind: "git",
         name: entry.name,
         cacheDir: ctx.cacheDir,
         commitSha,
@@ -122,7 +125,7 @@ export async function fetchGitSource(entry: Source, ctx: FetchContext): Promise<
  * the sparse set so discovery sees it regardless of the previous run's mode.
  */
 async function ensureCache(
-  entry: Source,
+  entry: GitSource,
   ctx: FetchContext,
   needsManifest: boolean,
 ): Promise<void> {

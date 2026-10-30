@@ -1,15 +1,24 @@
 import { resolve } from "node:path";
-import type { CitadelConfig, Source } from "../../schemas/citadel.js";
+import {
+  type CitadelConfig,
+  DEFAULT_BASE_DIR,
+  type GitSource,
+  type Source,
+  isGitSource,
+  isPathSource,
+} from "../../schemas/citadel.js";
 import { resolveAuth } from "../auth/resolver.js";
 import { defaultDestinationFor } from "../config/paths.js";
 import { AuthError, MaesterError, RefNotFoundError } from "../errors.js";
 import { type FilterMode, hasExplicitIncludes } from "../sources/filter-mode.js";
+import { type OverlapTargets, realOverlapTargets } from "../sources/local-path.js";
 import { findDanglingLinks } from "../sync/link.js";
 import {
   type MaterializationMode,
   type ProvenanceMarker,
   readProvenanceMarker,
 } from "../sync/provenance.js";
+import { checkLocalSource } from "./local-probe.js";
 import { type ProbeContext, probeCommitSha, probeManifest } from "./probe.js";
 
 export type StatusVerdict = "up-to-date" | "behind" | "failed";
@@ -18,7 +27,11 @@ export type BehindReason =
   | "never-synced"
   | "remote-ref-advanced"
   | "cache-missing"
+  | "local-changed"
   | "manifest-changed";
+
+/** Path sources only: the source directory or a linked original is gone. */
+export type FailedReason = "source-missing";
 
 /**
  * Fields on every outcome. `mode` / `filterMode` come from the last sync's
@@ -26,20 +39,22 @@ export type BehindReason =
  */
 export type StatusOutcomeBase = {
   name: string;
-  kind: "git";
+  kind: "git" | "path";
   mode?: MaterializationMode;
   filterMode?: FilterMode;
+  /** Path sources: the resolved absolute directory. */
+  sourcePath?: string;
 };
 
 export type StatusOutcome =
-  | (StatusOutcomeBase & { verdict: "up-to-date"; commitSha: string })
+  | (StatusOutcomeBase & { verdict: "up-to-date"; commitSha?: string })
   | (StatusOutcomeBase & {
       verdict: "behind";
       reasons: readonly BehindReason[];
       commitSha?: string;
       resolvedSha?: string;
     })
-  | (StatusOutcomeBase & { verdict: "failed"; error: string });
+  | (StatusOutcomeBase & { verdict: "failed"; error: string; reason?: FailedReason });
 
 export type StatusCounts = {
   upToDate: number;
@@ -88,6 +103,11 @@ export async function runStatus(
   }
 
   const limit = Math.min(Math.max(1, options.concurrency ?? DEFAULT_CONCURRENCY), entries.length);
+  const overlap = await realOverlapTargets(
+    options.repoRoot,
+    baseDir ?? DEFAULT_BASE_DIR,
+    config.sources,
+  );
   const outcomes: StatusOutcome[] = new Array(entries.length);
 
   let cursor = 0;
@@ -100,7 +120,7 @@ export async function runStatus(
           if (index >= entries.length) return;
           const entry = entries[index];
           if (!entry) return;
-          outcomes[index] = await checkSource(entry, options, env, baseDir);
+          outcomes[index] = await checkSource(entry, options, env, baseDir, overlap);
         }
       })(),
     );
@@ -121,10 +141,23 @@ async function checkSource(
   options: StatusOptions,
   env: NodeJS.ProcessEnv,
   baseDir: string | undefined,
+  overlap: OverlapTargets,
 ): Promise<StatusOutcome> {
   const destination = source.destination
     ? resolve(options.repoRoot, source.destination)
     : defaultDestinationFor(options.repoRoot, source.name, baseDir);
+
+  if (isPathSource(source)) {
+    return checkLocalSource(
+      source,
+      destination,
+      { repoRoot: options.repoRoot, env, overlap },
+      filterSetsEqual,
+    );
+  }
+  if (!isGitSource(source)) {
+    return { name: source.name, kind: "git", verdict: "failed", error: "source has no url" };
+  }
 
   const marker = await readProvenanceMarker(destination);
   if (!marker) {
@@ -142,15 +175,24 @@ async function checkSource(
 
     const resolvedSha = await probeCommitSha(source, probeCtx);
 
+    // A path-kind marker under a git source means the source changed kind;
+    // there is no recorded SHA, so it reads as the remote having moved.
+    const recordedSha = marker.kind === "git" ? marker.commitSha : undefined;
     const reasons: BehindReason[] = [];
-    if (resolvedSha !== marker.commitSha) reasons.push("remote-ref-advanced");
+    if (resolvedSha !== recordedSha) reasons.push("remote-ref-advanced");
     if (cacheMissing) reasons.push("cache-missing");
     if (await publishSurfaceChanged(source, marker, probeCtx)) reasons.push("manifest-changed");
 
     if (reasons.length === 0) {
       return { ...base, verdict: "up-to-date", commitSha: resolvedSha };
     }
-    return { ...base, verdict: "behind", reasons, commitSha: marker.commitSha, resolvedSha };
+    return {
+      ...base,
+      verdict: "behind",
+      reasons,
+      ...(recordedSha ? { commitSha: recordedSha } : {}),
+      resolvedSha,
+    };
   } catch (err) {
     return { ...base, verdict: "failed", error: errorMessage(err) };
   }
@@ -169,7 +211,7 @@ function recordedBase(name: string, marker: ProvenanceMarker): StatusOutcomeBase
  * changed. A legacy marker without `filterMode` only compares filter sets.
  */
 async function publishSurfaceChanged(
-  source: Source,
+  source: GitSource,
   marker: ProvenanceMarker,
   probeCtx: ProbeContext,
 ): Promise<boolean> {

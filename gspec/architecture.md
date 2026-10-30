@@ -1791,7 +1791,7 @@ Expansion happens in this order:
 
 The check runs at two points:
 
-- **Validation time**, in the citadel `.superRefine`, for paths with no `${VAR}`. It is a lexical check using `path.resolve` + `os.homedir()`.
+- **Validation time**, in the citadel `.superRefine`, for **repo-relative** paths only. It is a lexical check against a placeholder repo root, because the schema has no real repo root to compare absolute or `~` paths with.
 - **Run time**, after `realpath()`, for every path source. This catches `${VAR}` paths and symlinked directories.
 
 A violation names both sides: `source 'docs' path ../repo/citadel overlaps destination citadel/ of source 'api'`.
@@ -1810,6 +1810,7 @@ A violation names both sides: `source 'docs' path ../repo/citadel overlaps desti
   - When `path` was declared **repo-relative**, the target is relative (`path.relative(dirname(finalLinkPath), absFile)`), so moving a parent folder that holds both repos keeps links valid.
   - When `path` was absolute, `~`, or `${VAR}`, the target is absolute.
   - Targets are computed against the **final** destination path. `<dest>.tmp-XXXX` is a sibling at the same depth, so relative targets stay correct after the rename.
+  - Relative targets are computed between **real** paths (`realpath` of the target root and of the destination's parent). The kernel resolves `..` physically, so a symlinked ancestor on either side (e.g. macOS `/var` → `/private/var`) would otherwise produce dangling links.
 - **Atomicity.** Same as copy mode: build `<dest>.tmp-XXXX`, write `.maester-source.json` (a regular file), rename-swap. The clobber guard applies unchanged.
 - **No inline rewriting.** `applyInlineMetadata()` never runs.
 - **Unsupported filesystems.** `fs.symlink` failing with `EPERM` / `EACCES` (e.g. Windows without Developer Mode) fails the source with `LINK_UNSUPPORTED: … set mode: copy on this source`.
@@ -1859,7 +1860,7 @@ Exit-code rules are unchanged. Status writes nothing, including no `.gitignore` 
 #### Registration flows (P1)
 
 - Init's source loop asks **"Git repository or local directory?"** before the location prompt.
-- **Local directory** collects a path; `validators.ts` checks that it exists and is a directory after expansion, and runs the overlap guard. It then offers `link` (pre-selected) or `copy`. When the directory has no `maester.yaml` with entries, it offers the optional `includes` step with the whole-repository wording from §6.13.
+- **Local directory** collects a path; `validators.ts` checks that it exists and is a directory after expansion, and runs the overlap guard. It then offers `link` (pre-selected) or `copy`. When the directory has no `maester.yaml` with entries, it offers the optional `includes` step with the whole-repository wording from §6.13 — except in **copy** mode, where `includes` is required (copy with no declared paths would fail with `COPY_REQUIRES_DECLARED_PATHS` at sync).
 - The source-registration sub-flow lives in one module (`src/cli/commands/init.ts` → an exported `promptSourceEntry()`), so the future [Config Editing](features/config-editing.md) `add` verb reuses it instead of duplicating it.
 - `finalize.ts` writes `path` exactly as typed (it does not expand it), plus `mode` only when it is `copy` (link is the default). The result round-trips through validation.
 

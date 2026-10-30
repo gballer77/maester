@@ -8,6 +8,8 @@ import {
   validateEnvVarName,
   validateGitUrl,
   validateIncludesEntry,
+  validateLocalDirectory,
+  validateLocalPathShape,
   validateSourceName,
   validateTag,
 } from "../../core/init/validators.js";
@@ -15,6 +17,7 @@ import { runSkillInstall } from "../../core/skill/runner.js";
 import { listSkillTargets } from "../../core/skill/targets/index.js";
 import type { SkillTargetId } from "../../core/skill/types.js";
 import { SKILL_VERSION } from "../../core/skill/version.js";
+import { readManifestProbe } from "../../core/sources/filter-mode.js";
 import type { State } from "../../core/state/schema.js";
 import {
   type AuthRef,
@@ -68,7 +71,7 @@ export async function runInit(ctx: CliContext): Promise<number> {
     const reservedNames = (): Set<string> => new Set(sources.map((s) => s.name));
 
     while (true) {
-      const source = await collectOneSource(ctx, reservedNames(), effectiveBaseDir);
+      const source = await promptSourceEntry(ctx, reservedNames(), effectiveBaseDir);
       sources.push(source);
       const addAnother = await ctx.prompts.confirm({
         message: "Add another source?",
@@ -205,41 +208,48 @@ async function maybeInstallSkill(ctx: CliContext, baseDir: string): Promise<void
   }
 }
 
-async function collectOneSource(
+/**
+ * Prompt for one citadel source: git repository or local directory. Exported
+ * so the config-editing `add` verb reuses it rather than duplicating it.
+ */
+export async function promptSourceEntry(
   ctx: CliContext,
   reservedNames: Set<string>,
   effectiveBaseDir: string,
 ): Promise<Source> {
-  const name = await ctx.prompts.text({
-    message: "Source name (short, kebab-case, e.g. 'design-system')",
-    validate: (value) => {
-      const trimmed = value.trim();
-      const result = validateSourceName(trimmed);
-      if (!result.ok) return result.reason;
-      if (reservedNames.has(trimmed)) {
-        return `Name '${trimmed}' is already used in this citadel.`;
-      }
-      return undefined;
-    },
+  const name = (
+    await ctx.prompts.text({
+      message: "Source name (short, kebab-case, e.g. 'design-system')",
+      validate: (value) => {
+        const trimmed = value.trim();
+        const result = validateSourceName(trimmed);
+        if (!result.ok) return result.reason;
+        if (reservedNames.has(trimmed)) {
+          return `Name '${trimmed}' is already used in this citadel.`;
+        }
+        return undefined;
+      },
+    })
+  ).trim();
+
+  const kind = await ctx.prompts.select<"git" | "path">({
+    message: "Git repository or local directory?",
+    initialValue: "git",
+    options: [
+      { value: "git", label: "Git repository", hint: "fetched by URL into a local cache" },
+      {
+        value: "path",
+        label: "Local directory",
+        hint: "read straight from this machine — no git, no network",
+      },
+    ],
   });
 
-  const url = await ctx.prompts.text({
-    message: "Git URL (https://, ssh://, or git@host:path)",
-    validate: (value) => {
-      const result = validateGitUrl(value.trim());
-      return result.ok ? undefined : result.reason;
-    },
-  });
-
-  const ref = await ctx.prompts.text({
-    message:
-      "Ref to pin (branch, tag, or commit SHA) — leave blank for the remote's default branch",
-    placeholder: "main",
-  });
-
-  const includes = await collectIncludes(ctx);
-  const auth = await collectAuth(ctx);
-  const destination = await collectDestination(ctx, name.trim(), effectiveBaseDir);
+  const location =
+    kind === "git"
+      ? await collectGitLocation(ctx)
+      : await collectLocalLocation(ctx, name, effectiveBaseDir);
+  const destination = await collectDestination(ctx, name, effectiveBaseDir);
 
   const description = await ctx.prompts.text({
     message: "Description (optional — short free text)",
@@ -260,30 +270,164 @@ async function collectOneSource(
       return undefined;
     },
   });
-  const tags = parseTagsEntries(tagsRaw);
 
-  const trimmedRef = ref.trim();
-  const trimmedDest = destination.trim();
-  const trimmedDesc = description.trim();
-  const source: Source = {
-    name: name.trim(),
-    url: url.trim(),
-    ...(trimmedRef ? { ref: trimmedRef } : {}),
-    ...(includes.length > 0 ? { includes } : {}),
-    ...(auth ? { auth } : {}),
-    ...(trimmedDest ? { destination: trimmedDest } : {}),
-    ...(trimmedDesc ? { description: trimmedDesc } : {}),
-    ...(tags.length > 0 ? { tags } : {}),
-  };
-  return source;
+  return buildSourceEntry({
+    name,
+    location,
+    destination: destination.trim(),
+    description: description.trim(),
+    tags: parseTagsEntries(tagsRaw),
+  });
 }
 
-async function collectIncludes(ctx: CliContext): Promise<IncludeEntry[]> {
-  const useExplicit = await ctx.prompts.confirm({
-    message:
-      "Declare an explicit `includes` list? (Skip to use the source's maester.yaml if it has one; otherwise the whole repository is linked in, minus built-in excludes.)",
-    initialValue: false,
+export type GitLocation = {
+  kind: "git";
+  url: string;
+  ref: string;
+  includes: IncludeEntry[];
+  auth: AuthRef | undefined;
+};
+
+export type LocalLocation = {
+  kind: "path";
+  /** Exactly as typed; expansion happens at sync time. */
+  path: string;
+  mode: "link" | "copy";
+  includes: IncludeEntry[];
+};
+
+/**
+ * Assemble a config entry from collected answers. `path` is written as typed
+ * and `mode` only when it is `copy` (link is the default), so the result
+ * round-trips through validation unchanged.
+ */
+export function buildSourceEntry(input: {
+  name: string;
+  location: GitLocation | LocalLocation;
+  destination: string;
+  description: string;
+  tags: string[];
+}): Source {
+  const { location } = input;
+  const where =
+    location.kind === "git"
+      ? {
+          url: location.url,
+          ...(location.ref ? { ref: location.ref } : {}),
+        }
+      : {
+          path: location.path,
+          ...(location.mode === "copy" ? { mode: "copy" as const } : {}),
+        };
+  return {
+    name: input.name,
+    ...where,
+    ...(location.includes.length > 0 ? { includes: location.includes } : {}),
+    ...(location.kind === "git" && location.auth ? { auth: location.auth } : {}),
+    ...(input.destination ? { destination: input.destination } : {}),
+    ...(input.description ? { description: input.description } : {}),
+    ...(input.tags.length > 0 ? { tags: input.tags } : {}),
+  };
+}
+
+async function collectGitLocation(ctx: CliContext): Promise<GitLocation> {
+  const url = await ctx.prompts.text({
+    message: "Git URL (https://, ssh://, or git@host:path)",
+    validate: (value) => {
+      const result = validateGitUrl(value.trim());
+      return result.ok ? undefined : result.reason;
+    },
   });
+
+  const ref = await ctx.prompts.text({
+    message:
+      "Ref to pin (branch, tag, or commit SHA) — leave blank for the remote's default branch",
+    placeholder: "main",
+  });
+
+  const includes = await collectIncludes(ctx);
+  const auth = await collectAuth(ctx);
+  return { kind: "git", url: url.trim(), ref: ref.trim(), includes, auth };
+}
+
+async function collectLocalLocation(
+  ctx: CliContext,
+  name: string,
+  effectiveBaseDir: string,
+): Promise<LocalLocation> {
+  let path: string;
+  let real: string;
+  while (true) {
+    path = (
+      await ctx.prompts.text({
+        message:
+          "Directory path (relative to this repo, absolute, ~/…, or with ${ENV_VAR} placeholders)",
+        placeholder: "../platform-docs",
+        validate: (value) => {
+          const result = validateLocalPathShape(value);
+          return result.ok ? undefined : result.reason;
+        },
+      })
+    ).trim();
+    const checked = await validateLocalDirectory(name, path, {
+      repoRoot: ctx.repoRoot.path,
+      baseDir: effectiveBaseDir,
+      env: process.env,
+    });
+    if (checked.ok) {
+      real = checked.real;
+      break;
+    }
+    ctx.prompts.log.error(checked.reason);
+  }
+
+  const mode = await ctx.prompts.select<"link" | "copy">({
+    message: "Link or copy the files into the citadel?",
+    initialValue: "link",
+    options: [
+      {
+        value: "link",
+        label: "link",
+        hint: "symlinks to the live files; gitignored, machine-specific",
+      },
+      {
+        value: "copy",
+        label: "copy",
+        hint: "a committable snapshot; refreshed on each sync",
+      },
+    ],
+  });
+
+  const probe = await readManifestProbe(real);
+  if (probe.kind === "valid") {
+    ctx.prompts.log.info(
+      "Found a maester.yaml with published entries — skip `includes` to let it drive what is surfaced.",
+    );
+    return { kind: "path", path, mode, includes: await collectIncludes(ctx) };
+  }
+  // Copy mode needs a declared set: without one sync would surface the whole
+  // directory, which is link-only.
+  const includes =
+    mode === "copy" ? await collectIncludes(ctx, { required: true }) : await collectIncludes(ctx);
+  return { kind: "path", path, mode, includes };
+}
+
+async function collectIncludes(
+  ctx: CliContext,
+  options: { required?: boolean } = {},
+): Promise<IncludeEntry[]> {
+  if (options.required) {
+    ctx.prompts.log.info(
+      "Copy mode needs a declared file set: this directory has no maester.yaml with published entries.",
+    );
+  }
+  const useExplicit =
+    options.required ||
+    (await ctx.prompts.confirm({
+      message:
+        "Declare an explicit `includes` list? (Skip to use the source's maester.yaml if it has one; otherwise the whole repository is linked in, minus built-in excludes.)",
+      initialValue: false,
+    }));
   if (!useExplicit) return [];
 
   const raw = await ctx.prompts.text({

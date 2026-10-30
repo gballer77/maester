@@ -8,6 +8,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Local directories as sources (`path:`).** A source can read straight from a directory on this machine: no git, no cache, no network. `mode: link` (default) creates one symlink per file and gitignores the destination; `mode: copy` mirrors only the resolved files, with inline state applied, so it can be committed. `path` accepts repo-relative, absolute, `~/…` and `${ENV_VAR}` forms. The filter set uses the same precedence as git sources. Overlap guards stop a path from reading, or writing into, the citadel's own output.
+- **Status for path sources** without any network call: `local-changed` (fingerprint drift), `failed` with `reason: "source-missing"` (directory or linked original gone), and `manifest-changed`. Outcomes carry `kind` and `sourcePath`.
+- **`maester init` offers "Git repository or local directory?"** with link/copy choice; copy mode requires `includes` when the directory has no published manifest.
+- **MCP tools `citadel__list_linked_documents` / `citadel__read_linked_document`** for agent hosts that will not follow symlinks; registered when a linked destination exists.
+- **Grand Maester instructions** now explain linked sources and what a dangling link means.
 - **Whole-repository sources.** A git source with no `includes` whose repo has no `maester.yaml` (or one with `documents: []`) now syncs every file instead of failing. The content is **linked, never copied**: the destination holds per-file symlinks into `.maester/cache/<name>/` and is added to `.gitignore` on first sync. Built-in excludes skip VCS, dependency and build directories, binary files, and files over 1 MiB; `maester sync --help` lists them.
 - **`excludes` on citadel sources** to narrow a whole-repository source. Ignored with a warning in includes- and manifest-driven modes.
 - **Sync output and `--json`** carry `mode`, `filterMode`, `wholeRepoReason`, `fileCount`, `skipped` and `gitignoreEntry`. A source switching from copied to linked gets a `destination-ignored` warning with the `git rm -r --cached` to run.
@@ -15,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`maester publish` can finish with zero documents** after confirming that this publishes the whole repository; it writes `documents: []` with an explanatory comment.
 
 ### Changed
+- **`url` is now optional on citadel sources;** each source declares exactly one of `url` or `path`. `ref`/`auth` are git-only and `mode` is path-only.
+- **Provenance marker v2 is a `kind: git | path` union.** Path markers record the declared `sourcePath`, `resolvedPath`, a content `fingerprint`, and `fileCount`.
+- **`citadel` is a reserved connector name.**
+- **Relative link targets are computed between real paths,** fixing dangling links when an ancestor directory is a symlink (e.g. macOS `/var` → `/private/var`).
 - **`maester.yaml` `documents` may be empty or omitted** (treated as whole-repository).
 - **`manifest-changed` in status** now also fires when the resolved filter mode changes (e.g. a manifest appears upstream) or a whole-repository source's excludes change.
 - **Provenance marker v2** (`.maester-source.json`) records `markerVersion`, `kind`, `mode`, `filterMode` and `excludes`. Older markers are read as copy-mode and upgraded on the next sync.

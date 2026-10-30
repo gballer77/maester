@@ -1,4 +1,10 @@
 import { ENV_VAR_RE, SLUG_RE } from "../../schemas/citadel.js";
+import {
+  checkPathOverlap,
+  expandSourcePath,
+  malformedPlaceholder,
+  realOverlapTargets,
+} from "../sources/local-path.js";
 
 export type ValidationResult = { ok: true } | { ok: false; reason: string };
 
@@ -87,4 +93,37 @@ export function validateTag(value: string): ValidationResult {
     return { ok: false, reason: "Tag must be a kebab-case slug." };
   }
   return { ok: true };
+}
+
+/** Synchronous shape check for a local-directory source path (prompt-time). */
+export function validateLocalPathShape(value: string): ValidationResult {
+  if (value.trim().length === 0) return { ok: false, reason: "Path cannot be empty." };
+  const bad = malformedPlaceholder(value);
+  if (bad) {
+    return {
+      ok: false,
+      reason: `Malformed placeholder ${bad} — use \${NAME} with an uppercase env-var name.`,
+    };
+  }
+  return { ok: true };
+}
+
+/**
+ * Run-time check for a local-directory source: it must expand, exist, be a
+ * directory, and not overlap the citadel's output. Returns the real path.
+ */
+export async function validateLocalDirectory(
+  name: string,
+  value: string,
+  ctx: { repoRoot: string; baseDir: string; env: NodeJS.ProcessEnv },
+): Promise<{ ok: true; real: string } | { ok: false; reason: string }> {
+  let real: string;
+  try {
+    real = (await expandSourcePath(name, value, ctx)).real;
+  } catch (err) {
+    return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+  }
+  const targets = await realOverlapTargets(ctx.repoRoot, ctx.baseDir, [{ name }]);
+  const overlap = checkPathOverlap(name, value, real, targets);
+  return overlap ? { ok: false, reason: overlap } : { ok: true, real };
 }

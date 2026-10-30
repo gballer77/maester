@@ -1,6 +1,6 @@
 import { execFile as execFileCb } from "node:child_process";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { writeCitadelConfig } from "../../src/core/config/writer.js";
@@ -128,6 +128,47 @@ describe("CLI: maester sync", () => {
       /whole repository \(1 file\(s\)\) — it has no includes and no maester\.yaml/,
     );
     expect(output).toContain("added /citadel/handbook/ to .gitignore");
+  }, 30_000);
+
+  it("labels path sources (linked) / (copied) and emits kind and sourcePath in --json", async () => {
+    const notes = await makeTmpRepo({ withGit: false, withPackageJson: false });
+    try {
+      await notes.writeFile("README.md", "# notes\n");
+      const rel = relative(repo.path, notes.path);
+      await writeCitadelConfig(repo.path, {
+        schemaVersion: 1,
+        sources: [
+          { name: "notes", path: rel, includes: ["README.md"] },
+          {
+            name: "handbook",
+            path: rel,
+            mode: "copy",
+            includes: ["README.md"],
+            destination: "vendor/handbook",
+          },
+        ],
+      });
+      const human = await runCli(["sync"], repo.path);
+      expect(human.code).toBe(0);
+      expect(human.stdout).toMatch(/notes: added \(linked\)/);
+      expect(human.stdout).toMatch(/handbook: added \(copied\)/);
+      expect(human.stdout).toContain("added /citadel/notes/ to .gitignore");
+
+      const json = await runCli(["sync", "--json"], repo.path);
+      const outcomes = json.stdout
+        .split("\n")
+        .filter((l) => l.trim().length > 0)
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .filter((o) => o.status !== undefined && o.event === undefined);
+      expect(outcomes).toContainEqual(
+        expect.objectContaining({ name: "notes", kind: "path", mode: "link", status: "unchanged" }),
+      );
+      expect(outcomes.find((o) => o.name === "handbook")?.sourcePath).toEqual(
+        expect.stringMatching(/^\//),
+      );
+    } finally {
+      await notes.cleanup();
+    }
   }, 30_000);
 
   it("lists the built-in excludes in sync --help", async () => {

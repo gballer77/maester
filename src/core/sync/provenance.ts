@@ -11,17 +11,9 @@ export type MaterializationMode = "copy" | "link";
 const MATERIALIZATION_MODES: readonly MaterializationMode[] = ["copy", "link"];
 const FILTER_MODES: readonly FilterMode[] = ["includes", "manifest", "whole-repository"];
 
-/**
- * v2 provenance marker (architecture §3). `kind` is a discriminator so path
- * sources can add their own variant later; today every marker is a git marker.
- */
-export type ProvenanceMarker = {
+type MarkerCommon = {
   markerVersion: typeof PROVENANCE_MARKER_VERSION;
-  kind: "git";
   sourceName: string;
-  sourceUrl: string;
-  ref: string | undefined;
-  commitSha: string;
   mode: MaterializationMode;
   /** Absent only on legacy (pre-v2) markers; never treated as drift by itself. */
   filterMode: FilterMode | undefined;
@@ -31,14 +23,39 @@ export type ProvenanceMarker = {
   syncedAt: string;
 };
 
-/** What callers supply; version and kind are stamped by the writer. */
-export type ProvenanceMarkerInput = Omit<
-  ProvenanceMarker,
+/** v2 provenance marker (architecture §3), discriminated on `kind`. */
+export type GitProvenanceMarker = MarkerCommon & {
+  kind: "git";
+  sourceUrl: string;
+  ref: string | undefined;
+  commitSha: string;
+};
+
+export type PathProvenanceMarker = MarkerCommon & {
+  kind: "path";
+  /** The `path` exactly as declared in citadel.yaml; compared for `unchanged`. */
+  sourcePath: string;
+  /** Absolute path on the machine that wrote the marker; informational only. */
+  resolvedPath: string;
+  /** `sha256:<hex>` from `fingerprintTree()`. */
+  fingerprint: string;
+  fileCount: number;
+};
+
+export type ProvenanceMarker = GitProvenanceMarker | PathProvenanceMarker;
+
+type InputOf<M extends ProvenanceMarker> = Omit<
+  M,
   "markerVersion" | "kind" | "mode" | "filterMode"
 > & {
   mode?: MaterializationMode;
   filterMode?: FilterMode;
 };
+
+/** What callers supply; the version is stamped by the writer and `kind` defaults to git. */
+export type ProvenanceMarkerInput =
+  | (InputOf<GitProvenanceMarker> & { kind?: "git" })
+  | (InputOf<PathProvenanceMarker> & { kind: "path" });
 
 export async function writeProvenanceMarker(
   destination: string,
@@ -46,19 +63,35 @@ export async function writeProvenanceMarker(
 ): Promise<string> {
   const path = resolve(destination, PROVENANCE_FILENAME);
   // Explicit key order keeps the committed file stable and diff-friendly.
-  const body = {
-    markerVersion: PROVENANCE_MARKER_VERSION,
-    kind: "git",
-    sourceName: input.sourceName,
-    sourceUrl: input.sourceUrl,
-    ref: input.ref,
-    commitSha: input.commitSha,
+  const head = { markerVersion: PROVENANCE_MARKER_VERSION };
+  const tail = {
     mode: input.mode ?? "copy",
     filterMode: input.filterMode,
     filterSet: input.filterSet,
     excludes: input.excludes,
     syncedAt: input.syncedAt,
   };
+  const body =
+    input.kind === "path"
+      ? {
+          ...head,
+          kind: "path",
+          sourceName: input.sourceName,
+          sourcePath: input.sourcePath,
+          resolvedPath: input.resolvedPath,
+          fingerprint: input.fingerprint,
+          fileCount: input.fileCount,
+          ...tail,
+        }
+      : {
+          ...head,
+          kind: "git",
+          sourceName: input.sourceName,
+          sourceUrl: input.sourceUrl,
+          ref: input.ref,
+          commitSha: input.commitSha,
+          ...tail,
+        };
   await writeFile(path, `${JSON.stringify(body, null, 2)}\n`, "utf8");
   return path;
 }
@@ -75,28 +108,42 @@ export async function readProvenanceMarker(
   if (!existsSync(path)) return undefined;
   try {
     const parsed = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
-    if (
-      typeof parsed.sourceName !== "string" ||
-      typeof parsed.sourceUrl !== "string" ||
-      typeof parsed.commitSha !== "string" ||
-      !Array.isArray(parsed.filterSet)
-    ) {
+    if (typeof parsed.sourceName !== "string" || !Array.isArray(parsed.filterSet)) {
       return undefined;
     }
-    const marker: ProvenanceMarker = {
+    const common = {
       markerVersion: PROVENANCE_MARKER_VERSION,
-      kind: "git",
       sourceName: parsed.sourceName,
-      sourceUrl: parsed.sourceUrl,
-      ref: typeof parsed.ref === "string" ? parsed.ref : undefined,
-      commitSha: parsed.commitSha,
       mode: oneOf(parsed.mode, MATERIALIZATION_MODES) ?? "copy",
       filterMode: oneOf(parsed.filterMode, FILTER_MODES),
       filterSet: parsed.filterSet as readonly string[],
       syncedAt: typeof parsed.syncedAt === "string" ? parsed.syncedAt : new Date(0).toISOString(),
+      ...(Array.isArray(parsed.excludes) ? { excludes: parsed.excludes as readonly string[] } : {}),
+    } satisfies MarkerCommon;
+
+    if (parsed.kind === "path") {
+      if (typeof parsed.sourcePath !== "string" || typeof parsed.fingerprint !== "string") {
+        return undefined;
+      }
+      return {
+        ...common,
+        kind: "path",
+        sourcePath: parsed.sourcePath,
+        resolvedPath: typeof parsed.resolvedPath === "string" ? parsed.resolvedPath : "",
+        fingerprint: parsed.fingerprint,
+        fileCount: typeof parsed.fileCount === "number" ? parsed.fileCount : 0,
+      };
+    }
+    if (typeof parsed.sourceUrl !== "string" || typeof parsed.commitSha !== "string") {
+      return undefined;
+    }
+    return {
+      ...common,
+      kind: "git",
+      sourceUrl: parsed.sourceUrl,
+      ref: typeof parsed.ref === "string" ? parsed.ref : undefined,
+      commitSha: parsed.commitSha,
     };
-    if (Array.isArray(parsed.excludes)) marker.excludes = parsed.excludes as readonly string[];
-    return marker;
   } catch {
     return undefined;
   }

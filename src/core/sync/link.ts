@@ -1,6 +1,6 @@
 import type { Dirent } from "node:fs";
-import { mkdir, readdir, rm, stat, symlink } from "node:fs/promises";
-import { dirname, relative, resolve, sep } from "node:path";
+import { mkdir, readdir, realpath, rm, stat, symlink } from "node:fs/promises";
+import { basename, dirname, relative, resolve, sep } from "node:path";
 import { MaesterError } from "../errors.js";
 import { type ProvenanceMarkerInput, writeProvenanceMarker } from "./provenance.js";
 import { assertDestinationSafe, promoteTempToDestination } from "./stage.js";
@@ -31,8 +31,21 @@ export async function stageLinks(input: StageLinksInput): Promise<void> {
   const tempDir = `${input.destination}.tmp-${Math.random().toString(36).slice(2, 10)}`;
   await mkdir(tempDir, { recursive: true });
   try {
+    // Relative targets must be computed between REAL paths: the kernel
+    // resolves `..` physically, so a symlinked ancestor on either side (e.g.
+    // macOS /var -> /private/var) would otherwise yield a dangling link.
+    const resolved: StageLinksInput = input.relativeTargets
+      ? {
+          ...input,
+          targetRoot: await realpath(input.targetRoot),
+          destination: resolve(
+            await realpath(dirname(input.destination)),
+            basename(input.destination),
+          ),
+        }
+      : input;
     for (const file of input.files) {
-      await createLink(input, tempDir, file);
+      await createLink(resolved, tempDir, file);
     }
     await writeProvenanceMarker(tempDir, { ...input.marker, mode: "link" });
     await promoteTempToDestination(tempDir, input.destination);

@@ -1,15 +1,23 @@
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { relative, resolve } from "node:path";
-import type { CitadelConfig, Source } from "../../schemas/citadel.js";
+import {
+  type CitadelConfig,
+  DEFAULT_BASE_DIR,
+  type Source,
+  isGitSource,
+  isPathSource,
+} from "../../schemas/citadel.js";
 import { resolveAuth } from "../auth/resolver.js";
 import { CACHE_SUBDIR, cachePathForSource, defaultDestinationFor } from "../config/paths.js";
 import { AuthError, MaesterError, RefNotFoundError } from "../errors.js";
 import { clearWorktree } from "../git/client.js";
 import { appendMissingGitignoreEntries, gitignoreEntryFor, isIgnored } from "../repo/gitignore.js";
 import type { SkippedCounts } from "../sources/excludes.js";
-import { type FetchWarning, type FetchedTree, fetchSource } from "../sources/fetcher.js";
+import { type FetchWarning, type ResolvedTree, fetchSource } from "../sources/fetcher.js";
 import type { FilterMode, WholeRepoReason } from "../sources/filter-mode.js";
+import { type OverlapTargets, realOverlapTargets } from "../sources/local-path.js";
+import { resolveSourceMode } from "../sources/source-mode.js";
 import {
   type StateApplyDetail,
   type StateApplyResult,
@@ -21,6 +29,7 @@ import { findDanglingLinks, stageLinks } from "./link.js";
 import {
   type MaterializationMode,
   type ProvenanceMarker,
+  type ProvenanceMarkerInput,
   filterSetMatches,
   readProvenanceMarker,
 } from "./provenance.js";
@@ -44,10 +53,13 @@ export type SyncWarning = FetchWarning | DestinationIgnoredWarning;
 
 export type SyncOutcome = {
   name: string;
+  kind: "git" | "path";
   status: SyncStatus;
   destination: string;
   ref: string | undefined;
   commitSha?: string;
+  /** Path sources: the resolved absolute directory the files were read from. */
+  sourcePath?: string;
   mode?: MaterializationMode;
   filterMode?: FilterMode;
   wholeRepoReason?: WholeRepoReason;
@@ -79,7 +91,7 @@ export type SyncOptions = {
 
 export type ProgressEvent =
   | { type: "start"; name: string }
-  | { type: "fetched"; name: string; commitSha: string }
+  | { type: "fetched"; name: string; commitSha?: string }
   | { type: "staged"; name: string; status: SyncStatus }
   | { type: "warning"; name: string; warning: SyncWarning }
   | { type: "failed"; name: string; error: string };
@@ -111,6 +123,17 @@ export async function runSync(config: CitadelConfig, options: SyncOptions): Prom
   const outcomes: SyncOutcome[] = new Array(entries.length);
 
   await mkdir(resolve(options.repoRoot, CACHE_SUBDIR), { recursive: true });
+  // Built from every configured source (not just the scoped ones): a path
+  // source must not overlap any destination in the citadel.
+  const run: RunContext = {
+    env,
+    baseDir,
+    overlap: await realOverlapTargets(
+      options.repoRoot,
+      baseDir ?? DEFAULT_BASE_DIR,
+      config.sources,
+    ),
+  };
 
   let cursor = 0;
   const workers: Promise<void>[] = [];
@@ -122,7 +145,7 @@ export async function runSync(config: CitadelConfig, options: SyncOptions): Prom
           if (index >= entries.length) return;
           const entry = entries[index];
           if (!entry) return;
-          outcomes[index] = await processEntry(entry, options, env, baseDir);
+          outcomes[index] = await processEntry(entry, options, run);
         }
       })(),
     );
@@ -133,47 +156,58 @@ export async function runSync(config: CitadelConfig, options: SyncOptions): Prom
   return { outcomes, failed };
 }
 
+type RunContext = {
+  env: NodeJS.ProcessEnv;
+  baseDir: string | undefined;
+  overlap: OverlapTargets;
+};
+
 async function processEntry(
   source: Source,
   options: SyncOptions,
-  env: NodeJS.ProcessEnv,
-  baseDir: string | undefined,
+  run: RunContext,
 ): Promise<SyncOutcome> {
   const cacheDir = cachePathForSource(options.repoRoot, source.name);
   const destination = source.destination
     ? resolve(options.repoRoot, source.destination)
-    : defaultDestinationFor(options.repoRoot, source.name, baseDir);
+    : defaultDestinationFor(options.repoRoot, source.name, run.baseDir);
 
   options.onProgress?.({ type: "start", name: source.name });
   const existingMarker = await readProvenanceMarker(destination);
 
   try {
-    const auth = resolveAuth(source.auth, env);
-    const tree: FetchedTree = await fetchSource(source, {
+    const auth = resolveAuth(source.auth, run.env);
+    const tree = await fetchSource(source, {
       cacheDir,
       cacheExists: existsSync(cacheDir),
       tokenForUrl: auth.type === "token" ? auth.value : undefined,
+      local: { repoRoot: options.repoRoot, env: run.env, overlap: run.overlap },
     });
 
-    options.onProgress?.({ type: "fetched", name: source.name, commitSha: tree.commitSha });
+    options.onProgress?.({
+      type: "fetched",
+      name: source.name,
+      ...(tree.kind === "git" ? { commitSha: tree.commitSha } : {}),
+    });
     for (const warning of tree.warnings) {
       options.onProgress?.({ type: "warning", name: source.name, warning });
     }
 
-    const mode = resolveSourceMode(tree.filterMode);
+    const mode = tree.kind === "path" ? tree.mode : resolveSourceMode(source, tree.filterMode);
     const outcome = await materialize(source, tree, mode, destination, existingMarker, options);
     options.onProgress?.({ type: "staged", name: source.name, status: outcome.status });
     return outcome;
   } catch (err) {
     const message = errorMessage(err);
     options.onProgress?.({ type: "failed", name: source.name, error: message });
-    // A link-mode destination points into the cache; wiping it on a transient
-    // failure would leave every existing link dangling.
-    if (existingMarker?.mode !== "link") {
+    // Path sources have no cache. A link-mode git destination points into its
+    // cache; wiping that on a transient failure would dangle every link.
+    if (isGitSource(source) && existingMarker?.mode !== "link") {
       await clearWorktree(cacheDir).catch(() => undefined);
     }
     return {
       name: source.name,
+      kind: isPathSource(source) ? "path" : "git",
       status: "failed",
       destination,
       ref: source.ref,
@@ -183,18 +217,9 @@ async function processEntry(
   }
 }
 
-/**
- * Git sources are copied, except in whole-repository mode, which is link-only
- * (architecture Gap 74): an undeclared publish surface never enters version
- * control.
- */
-export function resolveSourceMode(filterMode: FilterMode): MaterializationMode {
-  return filterMode === "whole-repository" ? "link" : "copy";
-}
-
 async function materialize(
   source: Source,
-  tree: FetchedTree,
+  tree: ResolvedTree,
   mode: MaterializationMode,
   destination: string,
   existingMarker: ProvenanceMarker | undefined,
@@ -213,48 +238,73 @@ async function materialize(
   }
   const status: SyncStatus = existingMarker ? "updated" : "added";
   if (mode === "link") {
-    await stageLinksFor(tree, destination, source);
+    await stageLinks({
+      files: tree.files ?? [],
+      targetRoot: contentRoot(tree),
+      destination,
+      // The git cache lives inside the repo, so relative targets survive
+      // moving it; path sources are relative only when declared that way.
+      relativeTargets: tree.kind === "git" || tree.relativeLinks,
+      marker: markerInput(source, tree, "link"),
+    });
     return { ...base, status };
   }
   return { ...base, status, ...(await stageCopy(source, tree, destination)) };
 }
 
+function contentRoot(tree: ResolvedTree): string {
+  return tree.kind === "git" ? tree.cacheDir : tree.rootDir;
+}
+
 function baseOutcome(
   source: Source,
-  tree: FetchedTree,
+  tree: ResolvedTree,
   mode: MaterializationMode,
   destination: string,
 ): SyncOutcome {
   const outcome: SyncOutcome = {
     name: source.name,
+    kind: tree.kind,
     status: "unchanged",
     destination,
     ref: source.ref,
-    commitSha: tree.commitSha,
     mode,
     filterMode: tree.filterMode,
     warnings: [...tree.warnings],
   };
+  if (tree.kind === "git") outcome.commitSha = tree.commitSha;
+  else outcome.sourcePath = tree.rootDir;
   if (tree.wholeRepoReason) outcome.wholeRepoReason = tree.wholeRepoReason;
   if (tree.skipped) outcome.skipped = tree.skipped;
   if (tree.files) outcome.fileCount = tree.files.length;
   return outcome;
 }
 
+/**
+ * `unchanged` when the marker records the same source identity (git: commit;
+ * path: declared path + fingerprint), materialization, and filter shape — and,
+ * in link mode, every link still resolves.
+ */
 async function isUnchanged(
   source: Source,
-  tree: FetchedTree,
+  tree: ResolvedTree,
   mode: MaterializationMode,
   destination: string,
   marker: ProvenanceMarker | undefined,
 ): Promise<boolean> {
   if (!marker || !existsSync(destination)) return false;
+  const sameIdentity =
+    marker.kind === "git" && tree.kind === "git"
+      ? marker.commitSha === tree.commitSha
+      : marker.kind === "path" && tree.kind === "path"
+        ? marker.sourcePath === tree.sourcePath && marker.fingerprint === tree.fingerprint
+        : false;
   // A legacy marker has no filterMode; that alone is never treated as drift.
   const filterModeMatches =
     marker.filterMode === undefined || marker.filterMode === tree.filterMode;
   const sameShape =
+    sameIdentity &&
     marker.sourceName === source.name &&
-    marker.commitSha === tree.commitSha &&
     marker.mode === mode &&
     filterModeMatches &&
     filterSetMatches(marker.filterSet, tree.filterSet) &&
@@ -263,28 +313,16 @@ async function isUnchanged(
   return mode === "copy" || (await findDanglingLinks(destination)).length === 0;
 }
 
-async function stageLinksFor(
-  tree: FetchedTree,
-  destination: string,
-  source: Source,
-): Promise<void> {
-  await stageLinks({
-    files: tree.files ?? [],
-    targetRoot: tree.cacheDir,
-    destination,
-    // The cache lives inside the repo, so relative targets survive moving it.
-    relativeTargets: true,
-    marker: markerInput(source, tree, "link"),
-  });
-}
-
 async function stageCopy(
   source: Source,
-  tree: FetchedTree,
+  tree: ResolvedTree,
   destination: string,
 ): Promise<Partial<SyncOutcome>> {
   const stageResult = await stageDestination<StateApplyResult>({
-    cacheDir: tree.cacheDir,
+    cacheDir: contentRoot(tree),
+    // A git cache is already narrowed by sparse checkout; a path source's
+    // directory is not, so only its resolved files are copied.
+    ...(tree.kind === "path" ? { files: tree.files } : {}),
     destination,
     marker: markerInput(source, tree, "copy"),
     beforePromote: (stagedDir) => applyState(stagedDir, tree.rules),
@@ -298,17 +336,35 @@ async function stageCopy(
   };
 }
 
-function markerInput(source: Source, tree: FetchedTree, mode: MaterializationMode) {
-  return {
+function markerInput(
+  source: Source,
+  tree: ResolvedTree,
+  mode: MaterializationMode,
+): ProvenanceMarkerInput {
+  const shared = {
     sourceName: tree.name,
-    sourceUrl: source.url,
-    ref: source.ref,
-    commitSha: tree.commitSha,
     mode,
     filterMode: tree.filterMode,
     filterSet: tree.filterSet,
     ...(tree.excludes ? { excludes: tree.excludes } : {}),
     syncedAt: new Date().toISOString(),
+  };
+  if (tree.kind === "path") {
+    return {
+      ...shared,
+      kind: "path",
+      sourcePath: tree.sourcePath,
+      resolvedPath: tree.rootDir,
+      fingerprint: tree.fingerprint,
+      fileCount: tree.files.length,
+    };
+  }
+  return {
+    ...shared,
+    kind: "git",
+    sourceUrl: source.url ?? "",
+    ref: source.ref,
+    commitSha: tree.commitSha,
   };
 }
 

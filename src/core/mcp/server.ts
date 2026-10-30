@@ -9,6 +9,15 @@ import {
 } from "../connectors/dispatch.js";
 import { type FailureInput, buildFailureEnvelope } from "../connectors/envelope.js";
 import { ConfigError } from "../errors.js";
+import {
+  LIST_LINKED_DOCUMENTS_TOOL,
+  type LinkedDestination,
+  READ_LINKED_DOCUMENT_TOOL,
+  findLinkedDestinations,
+  linkedDocumentToolDescriptors,
+  listLinkedDocuments,
+  readLinkedDocument,
+} from "./linked-docs.js";
 import { setupStdioForMcp } from "./transport.js";
 
 export const MCP_SERVER_NAME = "maester";
@@ -47,9 +56,16 @@ export async function bootMcpServer(
     };
   }
 
-  let tools: ReturnType<typeof listConnectorTools>;
+  let tools: { name: string; description: string; inputSchema: unknown }[];
+  // The linked-document tools are registered only when a link-mode
+  // destination exists at boot (architecture §6.14).
+  let linked: LinkedDestination[];
   try {
-    tools = listConnectorTools(citadelConfig);
+    linked = await findLinkedDestinations(citadelConfig, repoRoot);
+    tools = [
+      ...listConnectorTools(citadelConfig),
+      ...(linked.length > 0 ? linkedDocumentToolDescriptors() : []),
+    ];
   } catch (err) {
     return {
       ok: false,
@@ -77,6 +93,20 @@ export async function bootMcpServer(
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const requestedName = request.params.name;
     const args = request.params.arguments ?? {};
+    if (linked.length > 0 && requestedName === LIST_LINKED_DOCUMENTS_TOOL) {
+      const source = typeof args.source === "string" ? args.source : undefined;
+      const listing = await listLinkedDocuments(linked, repoRoot, source);
+      return { content: [{ type: "text", text: JSON.stringify(listing) }] };
+    }
+    if (linked.length > 0 && requestedName === READ_LINKED_DOCUMENT_TOOL) {
+      const result =
+        typeof args.path === "string"
+          ? await readLinkedDocument(linked, repoRoot, args.path)
+          : { ok: false as const, message: "`path` is required" };
+      return result.ok
+        ? { content: [{ type: "text", text: result.text }] }
+        : { isError: true, content: [{ type: "text", text: result.message }] };
+    }
     const match = findOperationByToolName(citadelConfig, requestedName);
     let envelope: Awaited<ReturnType<typeof invokeOperation>>;
     if (!match) {

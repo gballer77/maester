@@ -106,6 +106,42 @@ describe("readProvenanceMarker", () => {
     expect(marker?.filterMode).toBeUndefined();
   });
 
+  it("round-trips a path-kind marker", async () => {
+    const dir = resolve(repo.path, "citadel/notes");
+    await mkdir(dir, { recursive: true });
+    await writeProvenanceMarker(dir, {
+      kind: "path",
+      sourceName: "notes",
+      sourcePath: "../notes",
+      resolvedPath: "/work/notes",
+      fingerprint: `sha256:${"f".repeat(64)}`,
+      fileCount: 2,
+      mode: "link",
+      filterMode: "includes",
+      filterSet: ["**/*.md"],
+      syncedAt: "2025-01-02T03:04:05.000Z",
+    });
+    const raw = JSON.parse(await readFile(resolve(dir, PROVENANCE_FILENAME), "utf8"));
+    expect(raw).toMatchObject({ markerVersion: 2, kind: "path", sourcePath: "../notes" });
+    expect(raw.sourceUrl).toBeUndefined();
+    const marker = await readProvenanceMarker(dir);
+    expect(marker).toMatchObject({
+      kind: "path",
+      sourcePath: "../notes",
+      resolvedPath: "/work/notes",
+      fileCount: 2,
+      mode: "link",
+    });
+  });
+
+  it("rejects a path-kind marker without a fingerprint", async () => {
+    const dir = resolve(repo.path, "citadel/broken");
+    await mkdir(dir, { recursive: true });
+    const broken = { kind: "path", sourceName: "x", sourcePath: "../x", filterSet: [] };
+    await writeFile(resolve(dir, PROVENANCE_FILENAME), JSON.stringify(broken), "utf8");
+    expect(await readProvenanceMarker(dir)).toBeUndefined();
+  });
+
   it("returns undefined when required fields are missing", async () => {
     const dir = resolve(repo.path, "citadel/invalid");
     await mkdir(dir, { recursive: true });

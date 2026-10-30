@@ -82,13 +82,18 @@ function buildJsonOutcome(outcome: StatusOutcome): Record<string, unknown> {
   };
   if (outcome.mode !== undefined) base.mode = outcome.mode;
   if (outcome.filterMode !== undefined) base.filterMode = outcome.filterMode;
-  if (outcome.verdict === "up-to-date") return { ...base, commitSha: outcome.commitSha };
+  if (outcome.sourcePath !== undefined) base.sourcePath = outcome.sourcePath;
+  if (outcome.verdict === "up-to-date") {
+    if (outcome.commitSha !== undefined) base.commitSha = outcome.commitSha;
+    return base;
+  }
   if (outcome.verdict === "behind") {
     base.reasons = outcome.reasons;
     if (outcome.commitSha !== undefined) base.commitSha = outcome.commitSha;
     if (outcome.resolvedSha !== undefined) base.resolvedSha = outcome.resolvedSha;
     return base;
   }
+  if (outcome.reason !== undefined) base.reason = outcome.reason;
   return { ...base, error: redactUrl(outcome.error) };
 }
 
@@ -101,7 +106,9 @@ function renderHumanSummary(ctx: CliContext, result: StatusResult): void {
     const mode = formatMode(outcome);
     switch (outcome.verdict) {
       case "up-to-date":
-        ctx.logger.success(`${outcome.name}: up to date (${shortSha(outcome.commitSha)})${mode}`);
+        ctx.logger.success(
+          `${outcome.name}: up to date${outcome.commitSha ? ` (${shortSha(outcome.commitSha)})` : ""}${mode}`,
+        );
         break;
       case "behind":
         ctx.logger.warning(`${outcome.name}: behind — ${formatReasons(outcome)}${mode}`);
@@ -154,6 +161,8 @@ function formatReason(
     }
     case "cache-missing":
       return "local cache missing — linked files no longer resolve";
+    case "local-changed":
+      return "local source changed since the last sync";
     case "manifest-changed":
       return "publish surface changed (remote maester.yaml, filter mode, or excludes)";
   }
@@ -162,7 +171,13 @@ function formatReason(
 /** The mode recorded by the last sync; empty for never-synced sources. */
 function formatMode(outcome: StatusOutcome): string {
   if (!outcome.filterMode) return "";
-  const linked = outcome.mode === "link" ? ", linked" : "";
+  // Git sources only show the mode when linked; path sources always do.
+  const linked =
+    outcome.mode === "link"
+      ? ", linked"
+      : outcome.kind === "path" && outcome.mode === "copy"
+        ? ", copied"
+        : "";
   return `  [${outcome.filterMode}${linked}]`;
 }
 
