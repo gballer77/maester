@@ -22,5 +22,5 @@ export async function writeCursorMcpEntry(
   options: WriteOptions = {},
 ): Promise<WriteOutcome> {
   const launch = options.launch ?? resolveMaesterLaunchCommand();
-  return writeJsonMcpFile(path.join(repoRoot, MCP_FILE), launch, []);
+  return writeJsonMcpFile(path.join(repoRoot, MCP_FILE), launch, [], options.directEntries ?? []);
 }

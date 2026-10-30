@@ -13,6 +13,17 @@ describe("connector policy fragments in target shells", () => {
     expect(body).toMatch(/MCP tools/);
   });
 
+  it("MCP-host bodies mention proxied third-party MCP servers without enumerating any", () => {
+    for (const body of [
+      renderClaudeSkillBody(opts),
+      renderCodexSkillBody(opts),
+      renderCursorRuleBody(opts),
+    ]) {
+      expect(body).toMatch(/third-party MCP servers/);
+      expect(body).toMatch(/declared in\s+the citadel and proxied by maester/);
+    }
+  });
+
   it("Codex body includes the connector tools section", () => {
     const body = renderCodexSkillBody(opts);
     expect(body).toMatch(/Connector tools \(traveling maesters\)/);

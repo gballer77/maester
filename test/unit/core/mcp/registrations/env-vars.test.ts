@@ -120,3 +120,26 @@ describe("loadConnectorEnvVarsBestEffort", () => {
     expect(result.loadError).toBeDefined();
   });
 });
+
+describe("collectForwardedEnvVars", () => {
+  it("unions connector names with proxied servers' names and skips direct servers", async () => {
+    const { collectForwardedEnvVars } = await import(
+      "../../../../../src/core/mcp/registrations/env-vars.js"
+    );
+    const result = collectForwardedEnvVars({
+      connectors: [tokenConnector("gl", "GITLAB_TOKEN")],
+      mcpServers: [
+        { name: "code", kind: "local", command: "x", envVars: ["CODE_TOKEN", "GITLAB_TOKEN"] },
+        { name: "tracker", kind: "remote", url: "https://t", auth: { envVar: "TRACKER_TOKEN" } },
+        {
+          name: "wiki",
+          kind: "remote",
+          url: "https://w",
+          register: "direct",
+          auth: { envVar: "WIKI_TOKEN" },
+        },
+      ],
+    });
+    expect(result.managed).toEqual(["CODE_TOKEN", "GITLAB_TOKEN", "TRACKER_TOKEN"]);
+  });
+});

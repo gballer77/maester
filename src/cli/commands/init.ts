@@ -24,10 +24,12 @@ import {
   type Connector,
   DEFAULT_BASE_DIR,
   type IncludeEntry,
+  type McpServer,
   type Source,
 } from "../../schemas/citadel.js";
 import { PromptCancelledError } from "../../ui/prompts.js";
 import type { CliContext } from "../context.js";
+import { describeServer, promptMcpServer } from "./mcp-server.js";
 
 export function registerInit(program: Command, getContext: () => CliContext): void {
   program
@@ -92,9 +94,14 @@ export async function runInit(ctx: CliContext): Promise<number> {
     }
 
     const connectors = await collectConnectors(ctx);
+    const mcpServers = await collectMcpServers(ctx, new Set(connectors.map((c) => c.name)));
+    const extras = [
+      connectors.length > 0 ? `${connectors.length} connector(s)` : "",
+      mcpServers.length > 0 ? `${mcpServers.length} MCP server(s)` : "",
+    ].filter(Boolean);
 
     const confirmWrite = await ctx.prompts.confirm({
-      message: `Write ${sources.length} source(s)${connectors.length > 0 ? ` and ${connectors.length} connector(s)` : ""} to citadel.yaml?`,
+      message: `Write ${sources.length} source(s)${extras.length > 0 ? ` and ${extras.join(" and ")}` : ""} to citadel.yaml?`,
       initialValue: true,
     });
     if (!confirmWrite) {
@@ -106,6 +113,7 @@ export async function runInit(ctx: CliContext): Promise<number> {
       sources,
       ...(baseDir ? { baseDir } : {}),
       ...(connectors.length > 0 ? { connectors } : {}),
+      ...(mcpServers.length > 0 ? { mcpServers } : {}),
     });
     ctx.prompts.log.success(`Wrote ${result.citadelPath}`);
     if (result.gitignoreAdded.length > 0) {
@@ -574,4 +582,32 @@ async function collectConnectors(ctx: CliContext): Promise<Connector[]> {
     `${types.length} connector type(s) available, but interactive registration during init is wired in a follow-on feature. Use \`maester connector add\` after init.`,
   );
   return [];
+}
+
+/**
+ * Optional third-party MCP server step, after connectors (architecture §6.17).
+ * Reuses the `mcp-server add` prompts; registration is written in the same
+ * pass as the Grand Maester install.
+ */
+async function collectMcpServers(ctx: CliContext, taken: Set<string>): Promise<McpServer[]> {
+  const servers: McpServer[] = [];
+  try {
+    let more = await ctx.prompts.confirm({
+      message: "Declare third-party MCP servers?",
+      initialValue: false,
+    });
+    while (more) {
+      const server = await promptMcpServer(ctx, taken);
+      servers.push(server);
+      taken.add(server.name);
+      ctx.prompts.note("MCP server", describeServer(server).join("\n"));
+      more = await ctx.prompts.confirm({ message: "Add another MCP server?", initialValue: false });
+    }
+  } catch (err) {
+    if (!(err instanceof PromptCancelledError)) throw err;
+    ctx.prompts.log.info(
+      "MCP server step skipped — add servers later with `maester mcp-server add`.",
+    );
+  }
+  return servers;
 }

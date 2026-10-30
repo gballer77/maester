@@ -61,7 +61,10 @@ export type {
   ConnectorToolDescriptor,
   ConnectorType,
 } from "./core/connectors/types.js";
-export type { CitadelConfig, Connector, Source, AuthRef } from "./schemas/citadel.js";
+export { checkMcpServers } from "./core/mcp/proxy/pool.js";
+export type { CheckReport, ServerReport } from "./core/mcp/proxy/pool.js";
+export type { UpstreamFailureReason } from "./core/mcp/proxy/reasons.js";
+export type { CitadelConfig, Connector, McpServer, Source, AuthRef } from "./schemas/citadel.js";
 export type { MaesterConfig, PublishedDocument } from "./schemas/maester.js";
 export {
   ConfigError,

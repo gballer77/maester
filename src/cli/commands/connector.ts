@@ -370,7 +370,7 @@ function parseExecArgs(raw: string[]): Record<string, unknown> {
   return args;
 }
 
-function reportRefresh(
+export function reportRefresh(
   ctx: CliContext,
   outcomes: ReadonlyArray<{ host: string; filePath: string; action: string; error?: string }>,
 ): void {

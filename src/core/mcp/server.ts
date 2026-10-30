@@ -18,13 +18,23 @@ import {
   listLinkedDocuments,
   readLinkedDocument,
 } from "./linked-docs.js";
+import { type Env, type ProxyPool, startProxyPool } from "./proxy/index.js";
 import { setupStdioForMcp } from "./transport.js";
 
 export const MCP_SERVER_NAME = "maester";
 
 export type McpBootResult =
-  | { ok: true; toolCount: number; server: Server }
+  | { ok: true; toolCount: number; server: Server; pool: ProxyPool }
   | { ok: false; exitCode: number; message: string };
+
+export type CreateMcpServerOptions = {
+  /** Environment for proxied upstreams. Defaults to `process.env`. */
+  env?: Env;
+  /** Sink for proxy diagnostics. Defaults to stderr. */
+  log?: (line: string) => void;
+  /** Per-upstream startup timeout override (tests). */
+  upstreamTimeoutMs?: number;
+};
 
 /**
  * Boot the stdio-based MCP server for the citadel at `repoRoot`. On a fatal
@@ -41,7 +51,42 @@ export async function bootMcpServer(
 ): Promise<McpBootResult> {
   // Make sure no shared-logger writes corrupt the JSON-RPC stream.
   setupStdioForMcp();
+  const created = await createMcpServer(repoRoot, serverVersion);
+  if (!created.ok) return created;
+  installShutdown(created.pool);
+  const transport = new StdioServerTransport();
+  await created.server.connect(transport);
+  return created;
+}
 
+/**
+ * Proxied local servers must not outlive `maester mcp` (Gap 61): close them on
+ * stdin end / SIGINT / SIGTERM, and SIGKILL any survivor synchronously on exit.
+ */
+function installShutdown(pool: ProxyPool): void {
+  let stopping = false;
+  const stop = (code: number) => {
+    if (stopping) return;
+    stopping = true;
+    void pool.shutdown().finally(() => process.exit(code));
+  };
+  process.stdin.on("end", () => stop(0));
+  process.stdin.on("close", () => stop(0));
+  process.on("SIGINT", () => stop(130));
+  process.on("SIGTERM", () => stop(143));
+  process.on("exit", () => pool.killSync());
+}
+
+/**
+ * Build the MCP server (connector tools, proxied tools, linked-doc tools)
+ * without connecting a transport. The proxy pool starts in the background;
+ * `tools/list` awaits its `ready` promise (Gap 58).
+ */
+export async function createMcpServer(
+  repoRoot: string,
+  serverVersion: string,
+  options: CreateMcpServerOptions = {},
+): Promise<McpBootResult> {
   let citadelConfig: Awaited<ReturnType<typeof loadCitadelConfig>>;
   try {
     citadelConfig = await loadCitadelConfig(repoRoot);
@@ -56,16 +101,15 @@ export async function bootMcpServer(
     };
   }
 
-  let tools: { name: string; description: string; inputSchema: unknown }[];
+  let connectorTools: { name: string; description: string; inputSchema: unknown }[];
+  let linkedTools: typeof connectorTools;
   // The linked-document tools are registered only when a link-mode
   // destination exists at boot (architecture §6.14).
   let linked: LinkedDestination[];
   try {
     linked = await findLinkedDestinations(citadelConfig, repoRoot);
-    tools = [
-      ...listConnectorTools(citadelConfig),
-      ...(linked.length > 0 ? linkedDocumentToolDescriptors() : []),
-    ];
+    connectorTools = listConnectorTools(citadelConfig);
+    linkedTools = linked.length > 0 ? linkedDocumentToolDescriptors() : [];
   } catch (err) {
     return {
       ok: false,
@@ -77,18 +121,27 @@ export async function bootMcpServer(
     };
   }
 
+  const pool = startProxyPool(citadelConfig.mcpServers ?? [], options.env ?? process.env, {
+    ...(options.log ? { log: options.log } : {}),
+    ...(options.upstreamTimeoutMs ? { timeoutMs: options.upstreamTimeoutMs } : {}),
+  });
+
   const server = new Server(
     { name: MCP_SERVER_NAME, version: serverVersion },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: { listChanged: false } } },
   );
 
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((t) => ({
+  server.setRequestHandler(ListToolsRequestSchema, async () => {
+    await pool.ready;
+    const own = (t: (typeof connectorTools)[number]) => ({
       name: t.name,
       description: t.description,
       inputSchema: t.inputSchema as { [k: string]: unknown },
-    })),
-  }));
+    });
+    // Order: connector tools, proxied tools, linked-doc tools (§4).
+    const proxied = pool.listTools().map(({ server: _s, upstreamName: _u, ...tool }) => tool);
+    return { tools: [...connectorTools.map(own), ...proxied, ...linkedTools.map(own)] };
+  });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const requestedName = request.params.name;
@@ -107,6 +160,9 @@ export async function bootMcpServer(
         ? { content: [{ type: "text", text: result.text }] }
         : { isError: true, content: [{ type: "text", text: result.message }] };
     }
+    await pool.ready;
+    const proxiedCall = pool.callTool(requestedName, args);
+    if (proxiedCall) return proxiedCall;
     const match = findOperationByToolName(citadelConfig, requestedName);
     let envelope: Awaited<ReturnType<typeof invokeOperation>>;
     if (!match) {
@@ -136,7 +192,5 @@ export async function bootMcpServer(
     };
   });
 
-  const transport = new StdioServerTransport();
-  await server.connect(transport);
-  return { ok: true, toolCount: tools.length, server };
+  return { ok: true, toolCount: connectorTools.length + linkedTools.length, server, pool };
 }

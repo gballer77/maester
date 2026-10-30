@@ -63,59 +63,59 @@ spec-version: v1
 
 ## 4. Capabilities
 
-- [ ] **P0**: Citadel configuration accepts an `mcpServers` list
+- [x] **P0**: Citadel configuration accepts an `mcpServers` list
   - Each entry has a unique `name`, a kind (`local` with `command` and optional `args`, or `remote` with `url`), and optional `description`, `envVars` (names), `auth`, and `register` fields
   - `name` is unique across both `mcpServers` and `connectors`; a duplicate fails validation naming both entries
   - Names are restricted to a conservative identifier shape so derived tool names are valid on every supported host
   - A local entry with a `url`, a remote entry with a `command`, or an unknown `register` value fails validation with a message naming the entry and field
 
-- [ ] **P0**: Secrets are referenced only by env-var name
+- [x] **P0**: Secrets are referenced only by env-var name
   - `envVars` lists names forwarded to a local server's environment at start time
   - A remote server's `auth` names one env var and the header it is sent in (defaulting to a bearer authorization header)
   - Every value in these fields must have the shape of an env-var name; anything else (e.g. a pasted token) fails validation without echoing the value
   - Every file maester writes contains env-var names only, never values
 
-- [ ] **P0**: `maester mcp` proxies tools from every proxied server
+- [x] **P0**: `maester mcp` proxies tools from every proxied server
   - At startup the server starts each local proxied server and connects to each remote proxied server concurrently, with a bounded startup timeout per server
   - Each proxied tool is exposed as `<server>__<tool>`, normalized to the same character rules as connector tools, with the upstream description and argument schema passed through
   - A tool call is forwarded to the owning server and its result returned to the host unchanged
   - Connector tools and proxied tools appear together in one tool list
 
-- [ ] **P0**: A failing proxied server degrades only its own tools
+- [x] **P0**: A failing proxied server degrades only its own tools
   - A server that fails to start, connect, or list tools within the timeout contributes no tools; all other tools remain available
   - The failure reason (missing env var by name, command not found, connection refused, timeout) is logged where the host surfaces MCP server output
   - A proxied server that exits mid-session causes its tool calls to return a clear error result rather than crashing `maester mcp`
   - All proxied local servers are terminated when `maester mcp` exits
 
-- [ ] **P0**: Declared env-var names reach the proxy on every supported host
+- [x] **P0**: Declared env-var names reach the proxy on every supported host
   - The `maester` host registration forwards the union of connector env-var names and `mcpServers` env-var names, using the existing per-host seeding mechanism
   - Removing a server removes its names from the managed set unless another connector or server still uses them
   - User-added entries in the host registration survive refresh, consistent with existing seeding behavior
 
-- [ ] **P1**: A server can opt into direct registration
+- [x] **P1**: A server can opt into direct registration
   - `register: direct` writes a separate maester-managed entry for that server into each supported host's MCP configuration, translated to that host's format
   - A host that cannot run the server's kind is skipped with a warning naming the host and server; other hosts are still written
   - Direct servers are not started by the proxy and contribute no `<server>__` tools
   - Removing a direct server, or switching it to proxied, removes its managed entries from every host; unmanaged entries are never touched
 
-- [ ] **P1**: Users can manage servers from init and from standalone commands
+- [x] **P1**: Users can manage servers from init and from standalone commands
   - Citadel initialization offers an optional step to declare MCP servers, after the connector step
   - `add` collects the same fields with the same validation and shows the full command or URL for confirmation before saving
   - `remove` confirms before deleting and refreshes every host registration; `list` shows each server's name, kind, mode, and env-var names
   - `add` and `remove` remind the user to restart their agent session
 
-- [ ] **P1**: A `check` command diagnoses declared servers
+- [x] **P1**: A `check` command diagnoses declared servers
   - Starts or connects to each proxied server outside an agent session and reports success or failure per server with the same reason codes the proxy logs
   - On success, lists the namespaced tools each server exposes and the total tool count
   - Reports missing env-var names without printing any env-var values
   - Exits non-zero when any server fails
 
-- [ ] **P2**: A server entry can restrict which upstream tools are exposed
+- [x] **P2**: A server entry can restrict which upstream tools are exposed
   - An optional allowlist of upstream tool names limits what the proxy exposes for that server
   - An allowlisted name the server does not offer produces a warning in `check` and in proxy logs
   - Omitting the allowlist exposes every tool
 
-- [ ] **P2**: Installed Grand Maester artifacts mention proxied servers
+- [x] **P2**: Installed Grand Maester artifacts mention proxied servers
   - The connector-policy text explains that `<server>__` tools may come from third-party MCP servers declared in the citadel
   - The text does not enumerate servers or tools; MCP tool discovery remains the source of truth
 

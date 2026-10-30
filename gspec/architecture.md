@@ -99,12 +99,14 @@ maester/
 │   │   │   │   ├── upstream.ts          # connectUpstream(server) — SDK Client over StdioClientTransport / StreamableHTTPClientTransport
 │   │   │   │   ├── pool.ts              # startProxyPool() — concurrent bounded startup, tool map, callTool forwarding, shutdown
 │   │   │   │   ├── tool-name.ts         # proxiedToolName(server, upstreamTool) — normalization + 64-char cap
-│   │   │   │   └── reasons.ts           # UpstreamFailureReason codes shared by proxy logs and `mcp-server check`
+│   │   │   │   ├── reasons.ts           # UpstreamFailureReason codes shared by proxy logs and `mcp-server check`
+│   │   │   │   ├── argv.ts              # splitArgs()/formatArgv() — shell-style args for `mcp-server add`, no shell invoked
+│   │   │   │   └── index.ts             # Barrel for the proxy cluster
 │   │   │   └── registrations/           # Per-agent-host MCP config writers
 │   │   │       ├── index.ts             # Registry; iterates installed Grand Maester targets and dispatches
 │   │   │       ├── command.ts           # resolveMaesterLaunchCommand() — `npx -y baller-maester mcp`
 │   │   │       ├── env-vars.ts          # collectForwardedEnvVars() — connector + proxied-server env-var names (§6.16)
-│   │   │       ├── direct.ts            # renderDirectEntry(host, server) — direct-mode entries per host (§6.17)
+│   │   │       ├── direct.ts            # HOST_CAPABILITIES + renderDirectEntries(host, servers) + applyDirectEntries() ledger (§6.17)
 │   │   │       ├── claude-code.ts       # .mcp.json at repo root (managed mcpServers.maester entry)
 │   │   │       ├── cursor.ts            # .cursor/mcp.json at repo root (same shape)
 │   │   │       └── codex.ts             # <repo>/.codex/config.toml [mcp_servers.maester] block (TOML round-trip)
@@ -512,7 +514,7 @@ A `z.discriminatedUnion("kind", [LocalMcpServerSchema, RemoteMcpServerSchema])`;
 | `auth` | remote | `{ envVar: string; header?: string }` | Optional. `envVar` matches `ENV_VAR_RE`. `header` matches `^[A-Za-z0-9-]+$`, default `Authorization`. Sent as `Authorization: Bearer <value>` when `header` is `Authorization` (or omitted), otherwise `<header>: <value>` (Gap 60). |
 | `description` | both | string | Optional. Shown by `mcp-server list` and `check`. Unlike a connector `description`, it is **not** prepended to tool descriptions — upstream descriptions pass through unchanged. |
 | `register` | both | `"proxy" \| "direct"` | Optional; default `"proxy"`. |
-| `tools` | both | string[] | Optional (P2). Allowlist of **upstream** tool names (pre-normalization). Ignored for direct servers, with a validation warning. |
+| `tools` | both | string[] | Optional (P2). Allowlist of **upstream** tool names (pre-normalization). Ignored for direct servers; `mcp-server check` warns about it (the schema has no warning channel). |
 
 Validation errors on `envVars` / `auth.envVar` never echo the rejected value (the zod message is static), so a pasted token is not printed back.
 
@@ -789,8 +791,8 @@ Each domain operation is a pure function (or a closely-related set of functions)
 | MCP transport binding | `src/core/mcp/transport.ts` | Sets up `StdioServerTransport`, installs the stderr-only redirect for `consola` so stdout stays clean for JSON-RPC frames (Gap 41), and hooks the process to exit cleanly when stdio closes. |
 | Gitignore | `src/core/repo/gitignore.ts` | Append missing entries to `.gitignore`; never reorder or rewrite. Returns the set of lines that were added. `isIgnored(repoRoot, relPath)` answers "already covered?" via `git check-ignore -q` when the repo has `.git/`, else by exact-line match (Gap 53). |
 | MCP proxy upstream | `src/core/mcp/proxy/upstream.ts` | `connectUpstream(server, env, { signal })` → `UpstreamHandle { name, tools, call(), close() }` or a typed `UpstreamFailure { reason, detail }`. Pre-flights missing env-var names before spawning/connecting. |
-| MCP proxy pool | `src/core/mcp/proxy/pool.ts` | `startProxyPool(servers, env)` → `{ ready, listTools(), callTool(name, args), shutdown() }`; `checkMcpServers(config, env)` for the `check` verb. Single owner of upstream lifetimes. |
-| Direct entries | `src/core/mcp/registrations/direct.ts` | `renderDirectEntry(host, server)` → host-native entry object or `{ skip: reason }`, driven by a `HOST_CAPABILITIES` table. |
+| MCP proxy pool | `src/core/mcp/proxy/pool.ts` | `startProxyPool(servers, env)` → `{ ready, listTools(), callTool(name, args), shutdown(), killSync() }`; `checkMcpServers(config, env, { names })` for the `check` verb. Single owner of upstream lifetimes. `server.ts` splits into `createMcpServer()` (no transport; used by tests over `InMemoryTransport`) and `bootMcpServer()` (stdio + shutdown hooks). |
+| Direct entries | `src/core/mcp/registrations/direct.ts` | `renderDirectEntries(host, servers)` → `{ entries, skipped }`, driven by the `HOST_CAPABILITIES` table (each renderer returns a host-native entry or `{ skip: reason }`); `applyDirectEntries()` applies the managed-server ledger. |
 | Linked documents | `src/core/mcp/linked-docs.ts` | P2 tool pair over link-mode destinations; read-only; refuses any path that is not a link inside a link-mode destination. |
 
 ### 6.4 External Integrations
@@ -2103,7 +2105,7 @@ When `server.tools` is set, only upstream tools whose **original** names appear 
 
 #### Direct mode (`registrations/direct.ts`, Gap 62)
 
-`refreshMcpRegistrations()` passes `directServers` to each host writer. `renderDirectEntry(host, server)` consults `HOST_CAPABILITIES`:
+`refreshMcpRegistrations()` renders `directServers` per host with `renderDirectEntries(host, servers)`, which consults `HOST_CAPABILITIES`, and hands the entries to each writer; `applyDirectEntries()` applies the ledger below:
 
 | Host | local direct entry | remote direct entry | `auth` on remote |
 |---|---|---|---|
@@ -2111,7 +2113,7 @@ When `server.tools` is set, only upstream tools whose **original** names appear 
 | Codex `.codex/config.toml` | `[mcp_servers.<name>] command, args, env_vars = [...]` | `url = "…"` | `bearer_token_env_var = "NAME"` (Authorization) or `env_http_headers = { "<Header>" = "NAME" }` |
 | Cursor `.cursor/mcp.json` | `{ command, args }` (env inherited) | `{ url }` | **skip host** with warning — Cursor's config has no supported env-var expansion (consistent with §6.16) |
 
-A host or kind combination marked unsupported is skipped with `{ host, server, reason }`, and other hosts are still written.
+A host or kind combination marked unsupported is skipped with `{ host, server, reason }`, and other hosts are still written. Skips (including unmanaged-name conflicts) are returned on each `McpRegistrationOutcome.skipped` and printed as stderr warnings by `refreshMcpRegistrations()`.
 
 Exact host keys are verified against current host docs during implementation; `HOST_CAPABILITIES` is the one place to change them.
 

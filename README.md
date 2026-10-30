@@ -145,6 +145,36 @@ includes:
 - **Output:** sync prints `categories: spec 12 · adr 4 · unclassified 3 · tags: 7 distinct` per source. `--verbose` shows each file's values and where each came from. `--json` adds `categoryBreakdown` and `tagRollup`.
 - **Mismatches:** an inline value that differs from its rule gets a warning, which `--quiet` silences.
 
+## Third-party MCP servers
+
+Declare the MCP servers your team uses once in `citadel.yaml`, and every agent host that has the Grand Maester installed (Claude Code, Cursor, Codex) gets the same tools:
+
+```yaml
+mcpServers:
+  - name: code-host                 # tools appear as code_host__<tool>
+    kind: local
+    command: npx
+    args: ["-y", "@example/code-host-mcp"]
+    envVars: [CODE_HOST_TOKEN]      # names only; export the values in your shell
+
+  - name: tracker
+    kind: remote
+    url: https://mcp.tracker.example.com/mcp
+    auth: { envVar: TRACKER_TOKEN } # sent as Authorization: Bearer <value>
+    tools: [search_tickets]         # optional allowlist
+
+  - name: wiki
+    kind: remote
+    url: https://mcp.wiki.example.com/mcp
+    register: direct                # written into each host's own config instead
+```
+
+- **Proxied (default):** `maester mcp` starts or connects to the server and exposes its tools under the single `maester` registration. A server that fails to start only loses its own tools.
+- **Direct (`register: direct`):** a separate, maester-managed entry is written into each host's MCP config. Use it for remote servers that need the host's own sign-in flow.
+- **Secrets:** only env-var names appear in any file maester writes. Local servers receive only the names you list, plus `PATH`/`HOME`-style basics.
+- **Manage them:** `maester mcp-server add`, `remove`, `list`, and `check`. `check` starts each proxied server and reports its tools, or why it failed. `maester init` also offers this step.
+- **Names** share one namespace with connectors; `maester` and `citadel` are reserved.
+
 ## Prerequisites
 
 - **Node.js** ≥ 24 LTS

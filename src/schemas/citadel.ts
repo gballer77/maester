@@ -140,6 +140,83 @@ export const ConnectorBaseSchema = z
   })
   .strict();
 
+/** MCP server names become tool prefixes and host entry keys (Gap 57, Gap 59). */
+export const MCP_SERVER_NAME_RE = /^[a-z][a-z0-9-]*$/;
+export const MCP_SERVER_NAME_MAX = 32;
+/** Names that would collide with the `maester` host entry or the built-in `citadel__` tools. */
+export const RESERVED_TOOL_PREFIXES = ["maester", "citadel"] as const;
+
+// Static messages: a pasted secret in one of these fields must never be echoed back.
+const EnvVarNameSchema = z
+  .string()
+  .regex(
+    ENV_VAR_RE,
+    "must be an env-var NAME (uppercase letters, digits, underscores), not a value",
+  );
+
+const McpServerNameSchema = z
+  .string()
+  .min(1)
+  .max(MCP_SERVER_NAME_MAX, `name must be at most ${MCP_SERVER_NAME_MAX} characters`)
+  .regex(
+    MCP_SERVER_NAME_RE,
+    "name must start with a lowercase letter and contain only lowercase letters, digits, and '-'",
+  );
+
+const McpServerCommonShape = {
+  name: McpServerNameSchema,
+  description: z.string().min(1).optional(),
+  register: z.enum(["proxy", "direct"]).optional(),
+  tools: z.array(z.string().min(1)).optional(),
+};
+
+export const LocalMcpServerSchema = z
+  .object({
+    ...McpServerCommonShape,
+    kind: z.literal("local"),
+    command: z
+      .string()
+      .min(1, "command is required")
+      .refine((v) => v.trim() === v, "command must not have leading or trailing whitespace"),
+    args: z.array(z.string()).optional(),
+    envVars: z.array(EnvVarNameSchema).optional(),
+  })
+  .strict();
+
+function isAllowedMcpUrl(value: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return false;
+  }
+  if (url.protocol === "https:") return true;
+  return url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+}
+
+export const RemoteMcpServerSchema = z
+  .object({
+    ...McpServerCommonShape,
+    kind: z.literal("remote"),
+    url: z.string().refine(isAllowedMcpUrl, "url must be https:// (http:// only for localhost)"),
+    auth: z
+      .object({
+        envVar: EnvVarNameSchema,
+        header: z
+          .string()
+          .regex(/^[A-Za-z0-9-]+$/, "header must be an HTTP header name")
+          .optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
+export const McpServerSchema = z.discriminatedUnion("kind", [
+  LocalMcpServerSchema,
+  RemoteMcpServerSchema,
+]);
+
 export const DEFAULT_BASE_DIR = "citadel";
 
 export function resolveBaseDir(config: { baseDir?: string }): string {
@@ -151,6 +228,7 @@ type ParsedCitadel = {
   baseDir?: string;
   sources: z.infer<typeof SourceSchema>[];
   connectors?: z.infer<typeof ConnectorBaseSchema>[];
+  mcpServers?: z.infer<typeof McpServerSchema>[];
 };
 
 const VALIDATION_ROOT = "/_citadel_root_";
@@ -276,6 +354,12 @@ function applyCombinedInvariants(data: ParsedCitadel, ctx: z.RefinementCtx): voi
         message: `connector name '${RESERVED_CONNECTOR_NAME}' is reserved for maester's built-in citadel tools`,
         path: ["connectors", i, "name"],
       });
+    } else if (entry.name === "maester") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "connector name 'maester' is reserved for the maester MCP host entry",
+        path: ["connectors", i, "name"],
+      });
     }
 
     const priorIndex = connectorNames.get(entry.name);
@@ -309,6 +393,39 @@ function applyCombinedInvariants(data: ParsedCitadel, ctx: z.RefinementCtx): voi
       }
     }
   }
+
+  checkMcpServerNames(data, connectorNames, ctx);
+}
+
+/** Gap 57: one namespace across connectors + mcpServers; `maester` / `citadel` reserved. */
+function checkMcpServerNames(
+  data: ParsedCitadel,
+  connectorNames: ReadonlyMap<string, number>,
+  ctx: z.RefinementCtx,
+): void {
+  const servers = data.mcpServers ?? [];
+  const seen = new Map<string, number>();
+  for (let i = 0; i < servers.length; i++) {
+    const name = servers[i]?.name;
+    if (!name) continue;
+    const issue = (message: string) =>
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message, path: ["mcpServers", i, "name"] });
+    if ((RESERVED_TOOL_PREFIXES as readonly string[]).includes(name)) {
+      issue(`MCP server name '${name}' is reserved`);
+    }
+    const connectorIndex = connectorNames.get(name);
+    if (connectorIndex !== undefined) {
+      issue(
+        `duplicate name '${name}' — mcpServers[${i}] and connectors[${connectorIndex}] share one tool namespace`,
+      );
+    }
+    const prior = seen.get(name);
+    if (prior !== undefined) {
+      issue(`duplicate MCP server name '${name}' — also used by mcpServers[${prior}]`);
+    } else {
+      seen.set(name, i);
+    }
+  }
 }
 
 export const CitadelConfigSchema = z
@@ -321,6 +438,7 @@ export const CitadelConfigSchema = z
       .optional(),
     sources: z.array(SourceSchema).optional().default([]),
     connectors: z.array(ConnectorBaseSchema).optional(),
+    mcpServers: z.array(McpServerSchema).optional(),
   })
   .strict()
   .superRefine((data, ctx) => {
@@ -342,3 +460,10 @@ export function isGitSource(source: Source): source is GitSource {
 }
 export type Connector = z.infer<typeof ConnectorBaseSchema>;
 export type CitadelConfig = z.infer<typeof CitadelConfigSchema>;
+export type McpServer = z.infer<typeof McpServerSchema>;
+export type LocalMcpServer = z.infer<typeof LocalMcpServerSchema>;
+export type RemoteMcpServer = z.infer<typeof RemoteMcpServerSchema>;
+
+export function isDirectMcpServer(server: McpServer): boolean {
+  return server.register === "direct";
+}

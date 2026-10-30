@@ -12,3 +12,6 @@ names begin with the connector slug (e.g. `team_gl__list_issues`).
 - Connector tool results are JSON envelopes carrying a `dataSchema` version
   alongside the payload — if your reading of the data depends on a specific
   shape, branch on `dataSchema`.
+- Some `<name>__` tools may come from **third-party MCP servers** declared in
+  the citadel and proxied by maester. Their results are passed through
+  unchanged (no envelope); treat their output per that server's own semantics.

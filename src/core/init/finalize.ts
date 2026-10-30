@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import type { CitadelConfig, Connector, Source } from "../../schemas/citadel.js";
+import type { CitadelConfig, Connector, McpServer, Source } from "../../schemas/citadel.js";
 import { CACHE_DIR_NAME, defaultDestinationFor } from "../config/paths.js";
 import { writeCitadelConfig } from "../config/writer.js";
 import { appendMissingGitignoreEntries } from "../repo/gitignore.js";
@@ -15,6 +15,7 @@ export type FinalizeInput = {
   sources: Source[];
   baseDir?: string;
   connectors?: Connector[];
+  mcpServers?: McpServer[];
 };
 
 export async function finalizeCitadel(
@@ -27,6 +28,7 @@ export async function finalizeCitadel(
     ...(input.baseDir ? { baseDir: input.baseDir } : {}),
     sources: input.sources,
     ...(input.connectors && input.connectors.length > 0 ? { connectors: input.connectors } : {}),
+    ...(input.mcpServers && input.mcpServers.length > 0 ? { mcpServers: input.mcpServers } : {}),
   };
   const citadelPath = await writeCitadelConfig(repoRoot, config);
   const gitignore = await appendMissingGitignoreEntries(repoRoot, [`${CACHE_DIR_NAME}/`]);

@@ -1,10 +1,19 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { type MaesterLaunchCommand, resolveMaesterLaunchCommand } from "./command.js";
+import { applyDirectEntries } from "./direct.js";
 
 const MCP_FILE = ".mcp.json";
 
-export type WriteOutcome = { filePath: string; action: "written" | "unchanged" };
+export type WriteOutcome = {
+  filePath: string;
+  action: "written" | "unchanged";
+  /** Direct servers not written because an unmanaged entry already uses the name. */
+  conflicts?: string[];
+};
+
+/** A rendered direct-mode entry: `[serverName, hostEntry]` (§6.17). */
+export type DirectEntry = [name: string, entry: Record<string, unknown>];
 
 export type WriteOptions = {
   /**
@@ -25,6 +34,8 @@ export type WriteOptions = {
    * and the existing `env` object is left intact apart from user-added entries.
    */
   connectorEnvVars?: readonly string[];
+  /** Direct-mode server entries to write beside `maester` (Citadel MCP Servers). */
+  directEntries?: readonly DirectEntry[];
 };
 
 /**
@@ -36,15 +47,19 @@ export type WriteOptions = {
  * edit by hand."
  */
 const MANAGED_MARKER_KEY = "_maesterManagedEnv";
+/** Ledger of direct-mode server entries the framework owns (Gap 62). */
+const MANAGED_SERVERS_KEY = "_maesterManagedServers";
 
 function maesterEntry(
   launch: MaesterLaunchCommand,
   envObject: Record<string, string>,
   managed: readonly string[],
+  managedServers: readonly string[],
 ): Record<string, unknown> {
   const entry: Record<string, unknown> = { command: launch.command, args: [...launch.args] };
   if (Object.keys(envObject).length > 0) entry.env = envObject;
   if (managed.length > 0) entry[MANAGED_MARKER_KEY] = [...managed];
+  if (managedServers.length > 0) entry[MANAGED_SERVERS_KEY] = [...managedServers];
   return entry;
 }
 
@@ -62,22 +77,34 @@ export async function writeClaudeCodeMcpEntry(
   options: WriteOptions = {},
 ): Promise<WriteOutcome> {
   const launch = options.launch ?? resolveMaesterLaunchCommand();
-  return writeJsonMcpFile(path.join(repoRoot, MCP_FILE), launch, options.connectorEnvVars ?? []);
+  return writeJsonMcpFile(
+    path.join(repoRoot, MCP_FILE),
+    launch,
+    options.connectorEnvVars ?? [],
+    options.directEntries ?? [],
+  );
 }
 
 export async function writeJsonMcpFile(
   filePath: string,
   launch: MaesterLaunchCommand,
   connectorEnvVars: readonly string[] = [],
+  directEntries: readonly DirectEntry[] = [],
 ): Promise<WriteOutcome> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const existingText = await readOrUndefined(filePath);
-  const newText = renderJsonWithMaesterEntry(existingText, launch, connectorEnvVars);
+  const { text: newText, conflicts } = renderJsonMcpConfig(
+    existingText,
+    launch,
+    connectorEnvVars,
+    directEntries,
+  );
+  const extra = conflicts.length > 0 ? { conflicts } : {};
   if (existingText === newText) {
-    return { filePath, action: "unchanged" };
+    return { filePath, action: "unchanged", ...extra };
   }
   await fs.writeFile(filePath, newText, "utf8");
-  return { filePath, action: "written" };
+  return { filePath, action: "written", ...extra };
 }
 
 export function renderJsonWithMaesterEntry(
@@ -85,46 +112,60 @@ export function renderJsonWithMaesterEntry(
   launch: MaesterLaunchCommand,
   connectorEnvVars: readonly string[] = [],
 ): string {
+  return renderJsonMcpConfig(existingText, launch, connectorEnvVars).text;
+}
+
+export function renderJsonMcpConfig(
+  existingText: string | undefined,
+  launch: MaesterLaunchCommand,
+  connectorEnvVars: readonly string[] = [],
+  directEntries: readonly DirectEntry[] = [],
+): { text: string; conflicts: string[] } {
   const parsed = parseOrEmpty(existingText);
   const rebuilt: Record<string, unknown> = {};
+  let conflicts: string[] = [];
+  const mutate = (value: unknown) => {
+    const result = mutateMcpServers(value, launch, connectorEnvVars, directEntries);
+    conflicts = result.conflicts;
+    return result.servers;
+  };
   let placed = false;
   for (const [key, value] of Object.entries(parsed)) {
     if (key === "mcpServers") {
-      rebuilt[key] = mutateMcpServers(value, launch, connectorEnvVars);
+      rebuilt[key] = mutate(value);
       placed = true;
     } else {
       rebuilt[key] = value;
     }
   }
   if (!placed) {
-    rebuilt.mcpServers = mutateMcpServers(undefined, launch, connectorEnvVars);
+    rebuilt.mcpServers = mutate(undefined);
   }
-  return `${JSON.stringify(rebuilt, null, 2)}\n`;
+  return { text: `${JSON.stringify(rebuilt, null, 2)}\n`, conflicts };
 }
 
 function mutateMcpServers(
   existing: unknown,
   launch: MaesterLaunchCommand,
   connectorEnvVars: readonly string[],
-): Record<string, unknown> {
-  const map = isPlainObject(existing) ? { ...existing } : {};
-  const rebuilt: Record<string, unknown> = {};
-  const managedSorted = [...connectorEnvVars].sort();
-  let placed = false;
-  for (const [key, value] of Object.entries(map)) {
-    if (key === "maester") {
-      const mergedEnv = mergeEnvObject(value, connectorEnvVars);
-      rebuilt[key] = maesterEntry(launch, mergedEnv, managedSorted);
-      placed = true;
-    } else {
-      rebuilt[key] = value;
-    }
-  }
-  if (!placed) {
-    const mergedEnv = mergeEnvObject(undefined, connectorEnvVars);
-    rebuilt.maester = maesterEntry(launch, mergedEnv, managedSorted);
-  }
-  return rebuilt;
+  directEntries: readonly DirectEntry[],
+): { servers: Record<string, unknown>; conflicts: string[] } {
+  const map: Record<string, unknown> = isPlainObject(existing) ? { ...existing } : {};
+  const previous = map.maester;
+  // Keep `maester` in its existing slot; a new one goes after existing entries.
+  if (!("maester" in map)) map.maester = undefined;
+  const previousLedger = readStringArray(
+    isPlainObject(previous) ? previous[MANAGED_SERVERS_KEY] : undefined,
+  );
+  const { servers, ledger, conflicts } = applyDirectEntries(
+    map,
+    previousLedger,
+    directEntries,
+    "maester",
+  );
+  const mergedEnv = mergeEnvObject(previous, connectorEnvVars);
+  servers.maester = maesterEntry(launch, mergedEnv, [...connectorEnvVars].sort(), ledger);
+  return { servers, conflicts };
 }
 
 /**

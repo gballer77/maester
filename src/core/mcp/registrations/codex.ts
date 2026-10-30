@@ -2,6 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import TOML from "@iarna/toml";
 import { type MaesterLaunchCommand, resolveMaesterLaunchCommand } from "./command.js";
+import { applyDirectEntries } from "./direct.js";
 
 const CONFIG_FILE = path.join(".codex", "config.toml");
 
@@ -14,19 +15,28 @@ const CONFIG_FILE = path.join(".codex", "config.toml");
  * edit by hand."
  */
 const MANAGED_MARKER_KEY = "_maester_managed_env_vars";
+/** Ledger of direct-mode server tables the framework owns (Gap 62). */
+const MANAGED_SERVERS_KEY = "_maester_managed_servers";
 
 function maesterBlock(
   launch: MaesterLaunchCommand,
   envVars: readonly string[],
   managed: readonly string[],
+  managedServers: readonly string[],
 ): TOML.JsonMap {
   const block: TOML.JsonMap = { command: launch.command, args: [...launch.args] };
   if (envVars.length > 0) block.env_vars = [...envVars];
   if (managed.length > 0) block[MANAGED_MARKER_KEY] = [...managed];
+  if (managedServers.length > 0) block[MANAGED_SERVERS_KEY] = [...managedServers];
   return block;
 }
 
-export type WriteOutcome = { filePath: string; action: "written" | "unchanged" };
+export type WriteOutcome = {
+  filePath: string;
+  action: "written" | "unchanged";
+  /** Direct servers not written because an unmanaged table already uses the name. */
+  conflicts?: string[];
+};
 
 export type WriteOptions = {
   /**
@@ -42,6 +52,8 @@ export type WriteOptions = {
    * through from its own shell environment to the spawned MCP subprocess.
    */
   connectorEnvVars?: readonly string[];
+  /** Direct-mode server tables to write beside `maester` (Citadel MCP Servers). */
+  directEntries?: readonly [string, Record<string, unknown>][];
 };
 
 /**
@@ -69,12 +81,18 @@ export async function writeCodexMcpEntry(
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const existingText = await readOrUndefined(filePath);
   const launch = options.launch ?? resolveMaesterLaunchCommand();
-  const newText = renderTomlWithMaesterBlock(existingText, launch, options.connectorEnvVars ?? []);
+  const { text: newText, conflicts } = renderCodexConfig(
+    existingText,
+    launch,
+    options.connectorEnvVars ?? [],
+    options.directEntries ?? [],
+  );
+  const extra = conflicts.length > 0 ? { conflicts } : {};
   if (existingText === newText) {
-    return { filePath, action: "unchanged" };
+    return { filePath, action: "unchanged", ...extra };
   }
   await fs.writeFile(filePath, newText, "utf8");
-  return { filePath, action: "written" };
+  return { filePath, action: "written", ...extra };
 }
 
 export function renderTomlWithMaesterBlock(
@@ -82,18 +100,34 @@ export function renderTomlWithMaesterBlock(
   launch: MaesterLaunchCommand,
   connectorEnvVars: readonly string[] = [],
 ): string {
+  return renderCodexConfig(existingText, launch, connectorEnvVars).text;
+}
+
+export function renderCodexConfig(
+  existingText: string | undefined,
+  launch: MaesterLaunchCommand,
+  connectorEnvVars: readonly string[] = [],
+  directEntries: readonly [string, Record<string, unknown>][] = [],
+): { text: string; conflicts: string[] } {
   const parsed: TOML.JsonMap =
     existingText && existingText.trim().length > 0
       ? TOML.parse(existingText)
       : ({} as TOML.JsonMap);
-  const mcpServers: TOML.JsonMap = isJsonMap(parsed.mcp_servers) ? { ...parsed.mcp_servers } : {};
-  const existingMaester = isJsonMap(mcpServers.maester) ? mcpServers.maester : undefined;
+  const existing: TOML.JsonMap = isJsonMap(parsed.mcp_servers) ? { ...parsed.mcp_servers } : {};
+  const existingMaester = isJsonMap(existing.maester) ? existing.maester : undefined;
+  if (!("maester" in existing)) existing.maester = {};
   const previouslyManaged = readStringArray(existingMaester?.[MANAGED_MARKER_KEY]);
   const userAdded = userAddedEnvVars(existingMaester?.env_vars, previouslyManaged);
   const mergedEnvVars = Array.from(new Set([...connectorEnvVars, ...userAdded])).sort();
-  mcpServers.maester = maesterBlock(launch, mergedEnvVars, [...connectorEnvVars].sort());
-  const next: TOML.JsonMap = { ...parsed, mcp_servers: mcpServers };
-  return TOML.stringify(next);
+  const { servers, ledger, conflicts } = applyDirectEntries(
+    existing as Record<string, TOML.AnyJson>,
+    readStringArray(existingMaester?.[MANAGED_SERVERS_KEY]),
+    directEntries as [string, TOML.AnyJson][],
+    "maester",
+  );
+  servers.maester = maesterBlock(launch, mergedEnvVars, [...connectorEnvVars].sort(), ledger);
+  const next: TOML.JsonMap = { ...parsed, mcp_servers: servers as TOML.JsonMap };
+  return { text: TOML.stringify(next), conflicts };
 }
 
 /**

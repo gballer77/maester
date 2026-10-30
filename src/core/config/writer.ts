@@ -44,6 +44,7 @@ export async function writeCitadelConfig(repoRoot: string, config: CitadelConfig
     ...(config.baseDir ? { baseDir: config.baseDir } : {}),
     sources: config.sources,
     ...(config.connectors && config.connectors.length > 0 ? { connectors: config.connectors } : {}),
+    ...(config.mcpServers && config.mcpServers.length > 0 ? { mcpServers: config.mcpServers } : {}),
   };
   const body = stringify(ordered, { indent: 2, lineWidth: 100, singleQuote: false });
   await writeFile(path, `${CITADEL_HEADER}${body}`, "utf8");
