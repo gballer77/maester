@@ -197,6 +197,43 @@ describe("SourceSchema", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it("accepts category and tags on an enriched includes entry", () => {
+    const result = SourceSchema.safeParse({
+      name: "x",
+      url: "https://example.com/r.git",
+      includes: [
+        { path: "docs/**", state: "canon", category: "reference", tags: ["external", "react"] },
+      ],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(normalizeIncludeEntry(result.data.includes?.[0] ?? "")).toEqual({
+        path: "docs/**",
+        state: "canon",
+        category: "reference",
+        tags: ["external", "react"],
+      });
+    }
+  });
+
+  it("rejects a non-slug category or tag on an includes entry, naming the field", () => {
+    const bad = SourceSchema.safeParse({
+      name: "x",
+      url: "https://example.com/r.git",
+      includes: [
+        "README.md",
+        { path: "docs/**", category: "Reference Docs", tags: ["ok", "Not OK"] },
+      ],
+    });
+    expect(bad.success).toBe(false);
+    if (!bad.success) {
+      const paths = bad.error.issues.map((i) => i.path.join("."));
+      expect(paths).toContain("includes.1.category");
+      expect(paths).toContain("includes.1.tags.1");
+      expect(bad.error.issues[0]?.message).toMatch(/kebab-case slug/);
+    }
+  });
 });
 
 describe("normalizeIncludeEntry", () => {

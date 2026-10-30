@@ -1,19 +1,23 @@
 import matter from "gray-matter";
-import type { ParseResult } from "./format.js";
-import { type State, parseState } from "./schema.js";
+import {
+  ABSENT_METADATA,
+  type InlineMetadataRead,
+  type InlineMetadataWrite,
+  metadataChanges,
+  readMetadataFields,
+} from "./schema.js";
 
-export function parse(buf: Buffer): ParseResult {
+export function read(buf: Buffer): InlineMetadataRead {
   let parsed: matter.GrayMatterFile<string>;
   try {
     parsed = matter(buf.toString("utf8"));
   } catch {
-    return { kind: "absent" };
+    return ABSENT_METADATA;
   }
-  const raw = (parsed.data as Record<string, unknown>).state;
-  return parseState(raw);
+  return readMetadataFields(parsed.data as Record<string, unknown>);
 }
 
-export function write(buf: Buffer, state: State): Buffer {
+export function write(buf: Buffer, resolved: InlineMetadataWrite): Buffer {
   let parsed: matter.GrayMatterFile<string>;
   try {
     parsed = matter(buf.toString("utf8"));
@@ -21,11 +25,12 @@ export function write(buf: Buffer, state: State): Buffer {
     return buf;
   }
   const sourceData = parsed.data as Record<string, unknown>;
-  if (sourceData.state === state) return buf;
+  const changes = metadataChanges(sourceData, resolved);
+  if (changes.length === 0) return buf;
   // Clone before mutating — gray-matter's content-keyed cache holds the same
   // data reference across calls; mutating it in place would pollute later
   // parses of identical input.
-  const nextData = { ...sourceData, state };
+  const nextData = { ...sourceData, ...Object.fromEntries(changes) };
   const next = matter.stringify(parsed.content, nextData);
   return Buffer.from(next, "utf8");
 }

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Document category and tags.** `category` (one slug) and `tags` (slug list) on `maester.yaml` documents and on enriched citadel `includes` entries are now written inline into every copied file, next to `state`. Inline values in a source file win per field, and the first matching rule that sets a field supplies it otherwise. Invalid inline values warn and fall through. Sync reports a per-source category breakdown and tag roll-up (`categoryBreakdown` / `tagRollup` in `--json`). `--verbose` names each field's source of truth, and inline/rule disagreements are reported as warnings.
 - **Local directories as sources (`path:`).** A source can read straight from a directory on this machine: no git, no cache, no network. `mode: link` (default) creates one symlink per file and gitignores the destination; `mode: copy` mirrors only the resolved files, with inline state applied, so it can be committed. `path` accepts repo-relative, absolute, `~/…` and `${ENV_VAR}` forms. The filter set uses the same precedence as git sources. Overlap guards stop a path from reading, or writing into, the citadel's own output.
 - **Status for path sources** without any network call: `local-changed` (fingerprint drift), `failed` with `reason: "source-missing"` (directory or linked original gone), and `manifest-changed`. Outcomes carry `kind` and `sourcePath`.
 - **`maester init` offers "Git repository or local directory?"** with link/copy choice; copy mode requires `includes` when the directory has no published manifest.
@@ -20,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`maester publish` can finish with zero documents** after confirming that this publishes the whole repository; it writes `documents: []` with an explanatory comment.
 
 ### Changed
+- **HTML and `.txt` inline metadata is a leading block** of `state` / `category` / `tags` lines (comments for HTML), rewritten in that order; previously only a line-1 `state` was recognized. Existing line-1 `state` markers keep working unchanged.
+- **`disagreement` warnings in sync `--json` gain a `field`** (`state`, `category` or `tags`).
 - **`url` is now optional on citadel sources;** each source declares exactly one of `url` or `path`. `ref`/`auth` are git-only and `mode` is path-only.
 - **Provenance marker v2 is a `kind: git | path` union.** Path markers record the declared `sourcePath`, `resolvedPath`, a content `fingerprint`, and `fileCount`.
 - **`citadel` is a reserved connector name.**

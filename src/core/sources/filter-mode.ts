@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { parseDocument } from "yaml";
 import { type Source, normalizeIncludeEntry } from "../../schemas/citadel.js";
 import { MaesterConfigSchema } from "../../schemas/maester.js";
-import type { RuleEntry } from "../state/schema.js";
+import type { RuleEntry, State } from "../state/schema.js";
 import { effectiveExcludes } from "./excludes.js";
 
 export const MAESTER_MANIFEST_FILENAME = "maester.yaml";
@@ -43,9 +43,7 @@ export function resolveFilterMode(
     return {
       mode: "includes",
       patterns: normalized.map((e) => e.path),
-      rules: normalized.map((e) =>
-        e.state === undefined ? { pattern: e.path } : { pattern: e.path, state: e.state },
-      ),
+      rules: normalized.map(toRuleEntry),
     };
   }
   switch (probe?.kind) {
@@ -77,13 +75,25 @@ export async function readManifestProbe(dir: string): Promise<ManifestProbe> {
     const parsed = MaesterConfigSchema.safeParse(doc.toJS({ maxAliasCount: -1 }));
     if (!parsed.success) return { kind: "invalid" };
     if (parsed.data.documents.length === 0) return { kind: "empty" };
-    const rules: RuleEntry[] = parsed.data.documents.map((d) =>
-      d.state === undefined ? { pattern: d.path } : { pattern: d.path, state: d.state },
-    );
+    const rules = parsed.data.documents.map(toRuleEntry);
     const patterns = parsed.data.documents.map((d) => d.path);
     if (!patterns.includes(MAESTER_MANIFEST_FILENAME)) patterns.unshift(MAESTER_MANIFEST_FILENAME);
     return { kind: "valid", patterns, rules };
   } catch {
     return { kind: "invalid" };
   }
+}
+
+/** A citadel `includes` entry or a manifest document, as an inline-metadata rule. */
+function toRuleEntry(entry: {
+  path: string;
+  state?: State | undefined;
+  category?: string | undefined;
+  tags?: string[] | undefined;
+}): RuleEntry {
+  const rule: RuleEntry = { pattern: entry.path };
+  if (entry.state !== undefined) rule.state = entry.state;
+  if (entry.category !== undefined) rule.category = entry.category;
+  if (entry.tags !== undefined) rule.tags = entry.tags;
+  return rule;
 }

@@ -7,9 +7,9 @@ import {
   isRelativeDeclaration,
   malformedPlaceholder,
 } from "../core/sources/local-path.js";
-import { StateSchema } from "../core/state/schema.js";
+import { CategorySchema, SLUG_RE, StateSchema, TagsSchema } from "../core/state/schema.js";
 
-export const SLUG_RE = /^[a-z0-9][a-z0-9-]*$/;
+export { SLUG_RE };
 export const ENV_VAR_RE = /^[A-Z][A-Z0-9_]*$/;
 const URL_FORMS = [/^https:\/\/\S+$/i, /^ssh:\/\/\S+$/i, /^git@[^\s:]+:\S+$/, /^file:\/\/\S+$/i];
 
@@ -62,18 +62,29 @@ export const IncludeEntryObjectSchema = z
   .object({
     path: IncludesPathSchema,
     state: StateSchema.optional(),
+    category: CategorySchema.optional(),
+    tags: TagsSchema.optional(),
   })
   .strict();
 
 export const IncludeEntrySchema = z.union([IncludesPathSchema, IncludeEntryObjectSchema]);
 
-export function normalizeIncludeEntry(entry: z.infer<typeof IncludeEntrySchema>): {
+export type NormalizedIncludeEntry = {
   path: string;
   state?: z.infer<typeof StateSchema>;
-} {
+  category?: string;
+  tags?: string[];
+};
+
+export function normalizeIncludeEntry(
+  entry: z.infer<typeof IncludeEntrySchema>,
+): NormalizedIncludeEntry {
   if (typeof entry === "string") return { path: entry };
-  if (entry.state === undefined) return { path: entry.path };
-  return { path: entry.path, state: entry.state };
+  const normalized: NormalizedIncludeEntry = { path: entry.path };
+  if (entry.state !== undefined) normalized.state = entry.state;
+  if (entry.category !== undefined) normalized.category = entry.category;
+  if (entry.tags !== undefined) normalized.tags = entry.tags;
+  return normalized;
 }
 
 export const SourceSchema = z

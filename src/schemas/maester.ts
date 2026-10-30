@@ -1,6 +1,5 @@
 import { z } from "zod";
-import { StateSchema } from "../core/state/schema.js";
-import { SLUG_RE } from "./citadel.js";
+import { CategorySchema, StateSchema, TagsSchema } from "../core/state/schema.js";
 
 function isSafeRepoRelative(value: string): boolean {
   if (value.length === 0 || /^\s+$/.test(value)) return false;
@@ -19,8 +18,8 @@ export const PublishedDocumentSchema = z
         "path must be a repo-relative file or glob; no leading '/' and no '..'",
       ),
     description: z.string().min(1).optional(),
-    category: z.string().min(1).regex(SLUG_RE, "category must be a kebab-case slug").optional(),
-    tags: z.array(z.string().min(1).regex(SLUG_RE, "tags must be slugs")).optional(),
+    category: CategorySchema.optional(),
+    tags: TagsSchema.optional(),
     state: StateSchema.optional(),
   })
   .strict();

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parse, write } from "../../../../src/core/state/markdown.js";
+import { read, write as writeMeta } from "../../../../src/core/state/markdown.js";
+import type { State } from "../../../../src/core/state/schema.js";
+
+const parse = (b: Buffer) => read(b).state;
+const write = (b: Buffer, state: State) => writeMeta(b, { state });
 
 const buf = (s: string) => Buffer.from(s, "utf8");
 

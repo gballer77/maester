@@ -3,17 +3,16 @@ import * as html from "./html.js";
 import * as json from "./json.js";
 import * as markdown from "./markdown.js";
 import * as plaintext from "./plaintext.js";
-import type { State } from "./schema.js";
+import type { InlineMetadataRead, InlineMetadataWrite } from "./schema.js";
 import * as yaml from "./yaml.js";
 
-export type ParseResult =
-  | { kind: "valid"; value: State }
-  | { kind: "invalid"; raw: string }
-  | { kind: "absent" };
+export type { InlineMetadataRead, InlineMetadataWrite, ParseResult } from "./schema.js";
 
 export type FormatHandler = {
-  parse(buf: Buffer): ParseResult;
-  write(buf: Buffer, state: State): Buffer;
+  /** Unsupported document shapes (e.g. a top-level YAML list) read as all-absent. */
+  read(buf: Buffer): InlineMetadataRead;
+  /** Returns the input buffer itself when nothing needs to change. */
+  write(buf: Buffer, resolved: InlineMetadataWrite): Buffer;
 };
 
 const HANDLERS: Record<string, FormatHandler> = {

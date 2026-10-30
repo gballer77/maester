@@ -118,6 +118,33 @@ sources:
 
 `maester init` asks "Git repository or local directory?" for each source.
 
+## Classifying documents: state, category and tags
+
+Copied files are stamped with up to three inline fields when they are synced into the citadel, so any reader can classify a file just by opening it:
+
+| Field | Values | Default |
+|---|---|---|
+| `state` | `draft` or `canon` | `draft` |
+| `category` | one kebab-case slug, e.g. `spec` | unset (not written) |
+| `tags` | a list of kebab-case slugs, e.g. `[api, public]` | unset (not written) |
+
+Declare them on a `maester.yaml` document entry, or on an enriched citadel `includes` entry:
+
+```yaml
+includes:
+  - path: docs/**
+    state: canon
+    category: reference
+    tags: [external, react]
+  - README.md
+```
+
+- **Precedence is per field:** a value already inline in the file wins, then the first matching rule that sets that field, then the default. Inline `tags` replace the rule's list entirely.
+- **Where the values go:** frontmatter (Markdown), `<!-- category: spec -->` comments before the DOCTYPE (HTML), top-level keys (YAML/JSON), or leading `category: spec` lines (`.txt`). Other formats are left untouched.
+- **Linked sources are never rewritten.** They carry only what is already in the original files.
+- **Output:** sync prints `categories: spec 12 · adr 4 · unclassified 3 · tags: 7 distinct` per source. `--verbose` shows each file's values and where each came from. `--json` adds `categoryBreakdown` and `tagRollup`.
+- **Mismatches:** an inline value that differs from its rule gets a warning, which `--quiet` silences.
+
 ## Prerequisites
 
 - **Node.js** ≥ 24 LTS

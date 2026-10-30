@@ -141,6 +141,7 @@ maester/
 │   │   │   ├── yaml.ts                  # Top-level state/category/tags keys via eemeli/yaml
 │   │   │   ├── json.ts                  # Top-level state/category/tags properties
 │   │   │   ├── plaintext.ts             # Leading 'state:' / 'category:' / 'tags:' block for .txt
+│   │   │   ├── leading-block.ts         # Shared leading-block scan/rewrite for html.ts + plaintext.ts
 │   │   │   └── applier.ts               # Walk staged dest -> resolve each field -> write back
 │   │   ├── status/                      # Read-only freshness check
 │   │   │   ├── runner.ts                # Per-source orchestrator; returns StatusResult
@@ -1897,16 +1898,19 @@ This deliberately deviates from the PRD's "`<source>__…` per source" wording. 
 #### Inline metadata contract
 
 ```ts
-// src/core/state/format.ts
-type Parsed<T> = { value: T } | { invalid: string };   // invalid = raw text, for the warning
-type InlineMetadataRead = { state?: Parsed<State>; category?: Parsed<string>; tags?: Parsed<string[]> };
-type InlineMetadataWrite = { state: State; category?: string; tags?: string[] };
+// src/core/state/schema.ts
+type ParseResult<T> = { kind: "valid"; value: T } | { kind: "invalid"; raw: string } | { kind: "absent" };
+type InlineMetadataRead = { state: ParseResult<State>; category: ParseResult<string>; tags: ParseResult<string[]> };
+type InlineMetadataWrite = { state: State; category?: string; tags?: readonly string[] };
 
-type FormatModule = {
-  read(text: string): InlineMetadataRead | undefined;          // undefined = unsupported shape
-  write(text: string, resolved: InlineMetadataWrite): string;  // returns input unchanged when nothing differs
+// src/core/state/format.ts
+type FormatHandler = {
+  read(buf: Buffer): InlineMetadataRead;                      // unsupported shape = every field absent
+  write(buf: Buffer, resolved: InlineMetadataWrite): Buffer;  // returns the same Buffer when nothing differs
 };
 ```
+
+HTML and `.txt` share `src/core/state/leading-block.ts` for the leading-block scan and rewrite.
 
 `schema.ts` gains `parseCategory()` / `parseTags()` chokepoints. Both enforce `SLUG_RE`; a `tags` value with any non-slug element is `invalid` as a whole.
 
@@ -1914,7 +1918,7 @@ type FormatModule = {
 
 | Format | `category` | `tags` | Placement |
 |---|---|---|---|
-| Markdown | frontmatter `category: spec` | frontmatter `tags: [api, public]` (YAML flow sequence) | gray-matter round-trip, as for `state` |
+| Markdown | frontmatter `category: spec` | frontmatter `tags` (a YAML sequence, written in gray-matter's default block style; flow input such as `[api, public]` is read but not preserved on rewrite) | gray-matter round-trip, as for `state` |
 | HTML | `<!-- category: spec -->` | `<!-- tags: api, public -->` | A **leading metadata block**: consecutive line-1+ comments matching `^<!--\s*(state\|category\|tags):\s*(.*?)\s*-->$`, before any DOCTYPE, written in the order `state`, `category`, `tags` |
 | YAML | top-level `category` | top-level `tags` (sequence) | `eemeli/yaml` doc model; new keys appended after `state` |
 | JSON | top-level `"category"` | top-level `"tags"` (array) | Existing keys updated in place; new keys appended |
@@ -1925,7 +1929,7 @@ Both HTML and `.txt` tags are comma-separated, each item trimmed. An empty item 
 #### Resolution (per file, per field, independently)
 
 1. **Inline** valid → use it (source of truth `inline`). Inline invalid → `bad-inline-category` / `bad-inline-tags` warning, then fall through.
-2. **Rule** → the **first** rule in declared order whose pattern matches **and** which sets *that field* (the same first-match semantics as Gap 21).
+2. **Rule** → for `category` / `tags`, the **first** rule in declared order whose pattern matches **and** which sets *that field* (Gap 70). `state` keeps Gap 21 as built: the first matching rule decides, even when it sets no state.
    - Rules are `IncludeEntry[]` (includes-driven) or `PublishedDocument[]` (manifest-driven).
    - Whole-repository mode has no rules.
 3. **Default.** `state` → `draft`. `category` / `tags` → **unset**, and nothing is written.
@@ -1946,7 +1950,7 @@ type MetadataWarning  =
   | { type: "disagreement"; file: string; field: "state" | "category" | "tags"; inline: unknown; rule: unknown };
 ```
 
-`SyncOutcome` gains `categoryBreakdown` and `tagRollup` (P1). Human output adds one line per source (`categories: spec 12 · adr 4 · unclassified 3 · tags: 7 distinct`). `--verbose` lists each file's resolved values with their source of truth. `--json` carries everything. `disagreement` warnings (P2) obey `--quiet`.
+`SyncOutcome` gains `categoryBreakdown` and `tagRollup` (P1). The existing `stateWarnings` field carries the full `MetadataWarning` union, so `--json` keeps its key. Human output adds one line per source (`categories: spec 12 · adr 4 · unclassified 3 · tags: 7 distinct`), omitted when no file in the source has a category or tag. `--json --verbose` adds a per-file `files` array. `--verbose` lists each file's resolved values with their source of truth. `--json` carries everything. `disagreement` warnings (P2) obey `--quiet`.
 
 Unsupported formats and link-mode files count as `unclassified` / `untagged`.
 

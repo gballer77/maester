@@ -65,20 +65,20 @@ spec-version: v1
 
 ## 4. Capabilities
 
-- [ ] **P0**: Maester config entries can declare optional `category` (single slug) and `tags` (array of slugs)
+- [x] **P0**: Maester config entries can declare optional `category` (single slug) and `tags` (array of slugs)
   - Each published-document entry in the maester config accepts optional `category` and `tags` fields (already accepted by today's schema; this capability codifies their semantics during sync)
   - `category` must be a single lowercase kebab-case slug; any other value fails config validation with a clear, actionable error
   - `tags` must be an array of lowercase kebab-case slugs; non-slug values fail validation with a clear error
   - The values are interpreted as applying to every file matched by that entry's path or glob
   - Both fields remain optional everywhere; entries without category or tags remain valid
 
-- [ ] **P0**: Citadel includes entries can declare optional `category` and `tags`
+- [x] **P0**: Citadel includes entries can declare optional `category` and `tags`
   - Each entry in a source's `includes` list accepts optional `category` and `tags` fields, in the same enriched-object form already used for `state`
   - Bare-string `includes` entries remain valid; the enriched form (`{ path, state?, category?, tags? }`) is the way to add per-include classification
   - Validation rejects non-slug values with a clear error pointing at the offending source and entry
   - The feature works uniformly across manifest-driven and includes-driven sources — the only difference is where the rule is declared
 
-- [ ] **P0**: Files can declare their own category and tags inline using format-specific conventions
+- [x] **P0**: Files can declare their own category and tags inline using format-specific conventions
   - **Markdown**: `category` and `tags` fields inside YAML frontmatter at the top of the file
   - **HTML**: first-content HTML comments of the form `<!-- category: <slug> -->` and `<!-- tags: <slug>, <slug>, ... -->`
   - **YAML / JSON**: top-level `category` and `tags` keys
@@ -86,41 +86,41 @@ spec-version: v1
   - Values are validated as slugs; an inline value that is not a valid slug surfaces a per-file warning, is treated as if no inline value were declared for that field, and falls through to rule resolution (it does not by itself fail the file or the source)
   - Absence of an inline value is not an error — it just means the file relies on rule resolution for that field
 
-- [ ] **P0**: Resolution precedence is inline > rule > unset, per field independently
+- [x] **P0**: Resolution precedence is inline > rule > unset, per field independently
   - When a file has an inline `category`, that value is authoritative regardless of any matching rule's `category`
   - When a file has no inline `category` and exactly one rule matches with a `category`, the rule's value is used
   - When neither applies, the file's `category` is unset and no `category` field is written into the materialized file
   - The same precedence applies independently to `tags` — a file may inherit `category` from the rule while overriding `tags` inline, or vice versa
   - The resolution decision for each file and field is deterministic and reproducible across runs
 
-- [ ] **P0**: At citadel import, every materialized file in a supported inline format carries the resolved category and tags inline
+- [x] **P0**: At citadel import, every materialized file in a supported inline format carries the resolved category and tags inline
   - On successful import of a markdown file, the destination copy contains `category` and/or `tags` fields in frontmatter (added or updated to match the resolved values; absent when unset)
   - On successful import of an HTML/YAML/JSON/plain-text file, the destination copy contains the resolved values in that format's inline convention (added or updated; absent when unset)
   - When the source already contained the correct inline values, the destination content is byte-identical to the source for that aspect (no spurious diffs)
   - Tags are written in a stable, deterministic order (the order declared in the rule, or the order present inline) so re-runs produce identical bytes
   - The write is scoped to the citadel's local destination; the original maester source file is never modified by this feature
 
-- [ ] **P0**: Files in formats without a supported inline pattern are materialized without category/tags
+- [x] **P0**: Files in formats without a supported inline pattern are materialized without category/tags
   - Binary assets, images, PDFs, and any file type outside the v1 inline-format list are materialized at the citadel destination without category or tags
   - The run does not fail and the file is not skipped — only its category/tags writing is skipped
   - A future feature may add sidecar metadata for these formats; this PRD does not block on that
 
-- [ ] **P0**: Category and tags are restricted to kebab-case slugs everywhere
+- [x] **P0**: Category and tags are restricted to kebab-case slugs everywhere
   - Maester config validation, citadel config validation, and inline parsing all enforce the lowercase kebab-case slug pattern
   - Out-of-vocabulary inline values surface a per-file warning and are treated as if no inline value were present for that field (see precedence capability)
   - The schema marker in each config file leaves room to expand allowed value patterns in a later spec version without breaking v1 consumers
 
-- [ ] **P1**: Sync output reports the per-source category/tag breakdown
+- [x] **P1**: Sync output reports the per-source category/tag breakdown
   - Each source's section of the sync summary includes counts of files materialized per resolved `category` value, and a roll-up of distinct tags applied
   - The breakdown is shown in both human-readable mode and structured (`--json`) output
   - Files with no resolved category (or no resolved tags) are reported under an explicit "unclassified" / "untagged" bucket so the totals reconcile
 
-- [ ] **P1**: Verbose sync output names the source of truth for each file's resolved category and tags
+- [x] **P1**: Verbose sync output names the source of truth for each file's resolved category and tags
   - When verbose output is requested, each file is listed with its resolved category and tags and the origin of each (`inline`, `rule`, or `unset`)
   - The verbose listing is opt-in and does not appear in the default output
   - This is the diagnostic path for understanding unexpected category/tag outcomes
 
-- [ ] **P2**: Sync warns when an inline value and a matching rule disagree
+- [x] **P2**: Sync warns when an inline value and a matching rule disagree
   - When a file carries an inline `category` (or `tags`) and a matching rule would have produced a different value, the run still uses the inline value (precedence is fixed), but logs an informational warning naming the file, the field, and both values
   - The warning is informational only; it does not fail the file or the source
   - The warning can be silenced via output flags

@@ -1,5 +1,6 @@
 import { execFile as execFileCb } from "node:child_process";
 import { existsSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -166,6 +167,57 @@ describe("CLI: maester sync", () => {
       expect(outcomes.find((o) => o.name === "handbook")?.sourcePath).toEqual(
         expect.stringMatching(/^\//),
       );
+    } finally {
+      await notes.cleanup();
+    }
+  }, 30_000);
+
+  it("reports the category/tag breakdown, verbose sources of truth, and --json fields", async () => {
+    const notes = await makeTmpRepo({ withGit: false, withPackageJson: false });
+    try {
+      await mkdir(notes.resolve("docs"), { recursive: true });
+      await notes.writeFile("docs/a.md", "# a\n");
+      await notes.writeFile("docs/b.md", "---\ncategory: runbook\n---\n# b\n");
+      await notes.writeFile("README.md", "# readme\n");
+      await writeCitadelConfig(repo.path, {
+        schemaVersion: 1,
+        sources: [
+          {
+            name: "handbook",
+            path: relative(repo.path, notes.path),
+            mode: "copy",
+            includes: [{ path: "docs/**", category: "spec", tags: ["api", "public"] }, "README.md"],
+          },
+        ],
+      });
+      const human = await runCli(["--verbose", "sync"], repo.path);
+      expect(human.code).toBe(0);
+      expect(human.stdout).toContain(
+        "categories: runbook 1 · spec 1 · unclassified 1 · tags: 2 distinct",
+      );
+      expect(human.stdout + human.stderr).toContain(
+        "docs/b.md — state=draft (default) · category=runbook (inline) · tags=api,public (rule)",
+      );
+      expect(human.stdout + human.stderr).toContain(
+        "docs/b.md: inline category 'runbook' overrides rule category 'spec'",
+      );
+
+      await notes.writeFile("README.md", "# readme v2\n");
+      const json = await runCli(["--json", "sync"], repo.path);
+      const outcome = json.stdout
+        .split("\n")
+        .filter((l) => l.trim().length > 0)
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .find((o) => o.name === "handbook" && o.event === undefined);
+      expect(outcome?.categoryBreakdown).toEqual({
+        byCategory: { spec: 1, runbook: 1 },
+        unclassified: 1,
+      });
+      expect(outcome?.tagRollup).toEqual({ byTag: { api: 2, public: 2 }, untagged: 1 });
+      expect(outcome?.files).toBeUndefined();
+
+      const quiet = await runCli(["--quiet", "sync"], repo.path);
+      expect(quiet.stdout + quiet.stderr).not.toContain("overrides rule category");
     } finally {
       await notes.cleanup();
     }

@@ -1,5 +1,10 @@
-import type { ParseResult } from "./format.js";
-import { type State, parseState } from "./schema.js";
+import {
+  ABSENT_METADATA,
+  type InlineMetadataRead,
+  type InlineMetadataWrite,
+  metadataChanges,
+  readMetadataFields,
+} from "./schema.js";
 
 function detectIndent(text: string): number | "\t" {
   const lines = text.split("\n");
@@ -15,35 +20,30 @@ function detectTrailingNewline(text: string): string {
   return text.endsWith("\n") ? "\n" : "";
 }
 
-export function parse(buf: Buffer): ParseResult {
-  let value: unknown;
-  try {
-    value = JSON.parse(buf.toString("utf8"));
-  } catch {
-    return { kind: "absent" };
-  }
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return { kind: "absent" };
-  }
-  return parseState((value as Record<string, unknown>).state);
-}
-
-export function write(buf: Buffer, state: State): Buffer {
-  const text = buf.toString("utf8");
+function parseObject(text: string): Record<string, unknown> | undefined {
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch {
-    return buf;
+    return undefined;
   }
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return buf;
-  }
-  const obj = value as Record<string, unknown>;
-  if (obj.state === state) return buf;
-  obj.state = state;
-  const indent = detectIndent(text);
-  const trailing = detectTrailingNewline(text);
-  const serialized = JSON.stringify(obj, null, indent);
-  return Buffer.from(`${serialized}${trailing}`, "utf8");
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+export function read(buf: Buffer): InlineMetadataRead {
+  const obj = parseObject(buf.toString("utf8"));
+  return obj ? readMetadataFields(obj) : ABSENT_METADATA;
+}
+
+export function write(buf: Buffer, resolved: InlineMetadataWrite): Buffer {
+  const text = buf.toString("utf8");
+  const obj = parseObject(text);
+  if (!obj) return buf;
+  const changes = metadataChanges(obj, resolved);
+  if (changes.length === 0) return buf;
+  // Existing keys keep their position; new keys append in state → category → tags order.
+  for (const [key, value] of changes) obj[key] = value;
+  const serialized = JSON.stringify(obj, null, detectIndent(text));
+  return Buffer.from(`${serialized}${detectTrailingNewline(text)}`, "utf8");
 }

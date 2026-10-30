@@ -105,7 +105,7 @@ describe("document state tagging — end to end", () => {
     const outcome = result.outcomes[0];
     expect(outcome?.stateBreakdown).toEqual({ canon: 0, draft: 1, untagged: 0 });
     expect(outcome?.stateWarnings).toEqual([
-      { type: "disagreement", file: "docs/x.md", inline: "draft", rule: "canon" },
+      { type: "disagreement", file: "docs/x.md", field: "state", inline: "draft", rule: "canon" },
     ]);
   }, 30_000);
 
@@ -185,5 +185,82 @@ describe("document state tagging — end to end", () => {
     expect(result.outcomes[0]?.stateWarnings).toEqual([
       { type: "bad-inline-state", file: "docs/x.md", raw: "published" },
     ]);
+  }, 30_000);
+});
+
+describe("document category and tags — end to end", () => {
+  it("manifest-driven: writes category and tags from maester.yaml, inline wins per field", async () => {
+    const remote = await newRemote([
+      {
+        path: "maester.yaml",
+        contents:
+          "schemaVersion: 1\ndocuments:\n" +
+          "  - path: gspec/**/*.md\n    category: spec\n    tags: [internal, architecture]\n" +
+          "  - path: CHANGELOG.md\n    category: changelog\n",
+      },
+      { path: "gspec/profile.md", contents: "# profile\n" },
+      { path: "gspec/ops.md", contents: "---\ncategory: runbook\n---\n# ops\n" },
+      { path: "CHANGELOG.md", contents: "# changes\n" },
+    ]);
+    const config: CitadelConfig = {
+      schemaVersion: 1,
+      sources: [{ name: "alpha", url: remote.bareRepoUrl, ref: "main" }],
+    };
+
+    const result = await runSync(config, { repoRoot: repo.path });
+    expect(result.failed).toBe(0);
+    const dest = repo.resolve("citadel/alpha");
+    expect(await read(dest, "gspec/profile.md")).toBe(
+      "---\nstate: draft\ncategory: spec\ntags:\n  - internal\n  - architecture\n---\n# profile\n",
+    );
+    expect(await read(dest, "gspec/ops.md")).toContain("category: runbook");
+    expect(await read(dest, "gspec/ops.md")).toContain("  - internal");
+    expect(await read(dest, "CHANGELOG.md")).toContain("category: changelog");
+    expect(await read(dest, "maester.yaml")).not.toMatch(/^state:/m);
+
+    const outcome = result.outcomes[0];
+    expect(outcome?.categoryBreakdown).toEqual({
+      byCategory: { spec: 1, runbook: 1, changelog: 1 },
+      unclassified: 0,
+    });
+    expect(outcome?.tagRollup).toEqual({ byTag: { internal: 2, architecture: 2 }, untagged: 1 });
+
+    // Idempotent: nothing upstream changed, so the re-sync is unchanged.
+    const again = await runSync(config, { repoRoot: repo.path });
+    expect(again.outcomes[0]?.status).toBe("unchanged");
+  }, 30_000);
+
+  it("includes-driven: writes category and tags declared on a citadel includes entry", async () => {
+    const remote = await newRemote([
+      { path: "docs/intro.md", contents: "# intro\n" },
+      { path: "docs/page.html", contents: "<!DOCTYPE html>\n<p>hi</p>\n" },
+      { path: "logo.png", contents: "png" },
+    ]);
+    const config: CitadelConfig = {
+      schemaVersion: 1,
+      sources: [
+        {
+          name: "react",
+          url: remote.bareRepoUrl,
+          ref: "main",
+          includes: [
+            { path: "docs/**", category: "reference", tags: ["external", "public-domain"] },
+            "logo.png",
+          ],
+        },
+      ],
+    };
+    const result = await runSync(config, { repoRoot: repo.path });
+    expect(result.failed).toBe(0);
+    const dest = repo.resolve("citadel/react");
+    expect(await read(dest, "docs/page.html")).toBe(
+      "<!-- state: draft -->\n<!-- category: reference -->\n<!-- tags: external, public-domain -->\n<!DOCTYPE html>\n<p>hi</p>\n",
+    );
+    expect(await read(dest, "docs/intro.md")).toContain("category: reference");
+    expect(await read(dest, "logo.png")).toBe("png");
+    expect(result.outcomes[0]?.categoryBreakdown).toEqual({
+      byCategory: { reference: 2 },
+      unclassified: 1,
+    });
   }, 30_000);
 });

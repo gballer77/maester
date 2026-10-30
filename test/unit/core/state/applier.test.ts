@@ -46,7 +46,7 @@ describe("applyState", () => {
     expect(result.breakdown).toEqual({ canon: 0, draft: 1, untagged: 0 });
     expect(result.details[0]?.sourceOfTruth).toBe("inline");
     expect(result.warnings).toEqual([
-      { type: "disagreement", file: "docs/wip.md", inline: "draft", rule: "canon" },
+      { type: "disagreement", file: "docs/wip.md", field: "state", inline: "draft", rule: "canon" },
     ]);
   });
 
@@ -86,7 +86,11 @@ describe("applyState", () => {
       file: "asset.png",
       state: "untagged",
       sourceOfTruth: "untagged",
+      categorySource: "untagged",
+      tagsSource: "untagged",
     });
+    expect(result.categoryBreakdown).toEqual({ byCategory: {}, unclassified: 1 });
+    expect(result.tagRollup).toEqual({ byTag: {}, untagged: 1 });
     expect(await readAt(dir, "asset.png")).toBe(original);
   });
 

@@ -28,6 +28,21 @@ describe("PublishedDocumentSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("rejects a non-slug category or tag with a field-named error", () => {
+    const result = PublishedDocumentSchema.safeParse({
+      path: "docs/**",
+      category: "API Docs",
+      tags: ["public", "Internal"],
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((i) => i.path.join("."))).toEqual(["category", "tags.1"]);
+      expect(result.error.issues[0]?.message).toMatch(
+        /category must be a lowercase kebab-case slug/,
+      );
+    }
+  });
+
   it("accepts an entry with state=canon", () => {
     const result = PublishedDocumentSchema.safeParse({ path: "README.md", state: "canon" });
     expect(result.success).toBe(true);

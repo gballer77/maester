@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { loadCitadelConfig } from "../../core/config/loader.js";
 import { MaesterError } from "../../core/errors.js";
 import { BUILTIN_EXCLUDES, WHOLE_REPO_MAX_FILE_BYTES } from "../../core/sources/excludes.js";
-import type { StateWarning } from "../../core/state/applier.js";
+import type { StateApplyDetail, StateWarning } from "../../core/state/applier.js";
 import {
   type SyncOutcome,
   type SyncResult,
@@ -80,7 +80,9 @@ export async function runSyncCommand(
 
   if (ctx.flags.json) {
     for (const outcome of result.outcomes) {
-      process.stdout.write(`${JSON.stringify(buildJsonOutcome(outcome))}\n`);
+      process.stdout.write(
+        `${JSON.stringify(buildJsonOutcome(outcome, ctx.flags.verbose === true))}\n`,
+      );
     }
   } else {
     renderHumanSummary(ctx, result);
@@ -88,7 +90,7 @@ export async function runSyncCommand(
   return result.failed > 0 ? 1 : 0;
 }
 
-function buildJsonOutcome(outcome: SyncOutcome): Record<string, unknown> {
+function buildJsonOutcome(outcome: SyncOutcome, verbose: boolean): Record<string, unknown> {
   const base: Record<string, unknown> = {
     name: outcome.name,
     kind: outcome.kind,
@@ -110,6 +112,9 @@ function buildJsonOutcome(outcome: SyncOutcome): Record<string, unknown> {
   if (outcome.stateBreakdown !== undefined) {
     base.stateBreakdown = outcome.stateBreakdown;
   }
+  if (outcome.categoryBreakdown !== undefined) base.categoryBreakdown = outcome.categoryBreakdown;
+  if (outcome.tagRollup !== undefined) base.tagRollup = outcome.tagRollup;
+  if (verbose && outcome.stateDetails !== undefined) base.files = outcome.stateDetails;
   if (outcome.stateWarnings && outcome.stateWarnings.length > 0) {
     base.stateWarnings = outcome.stateWarnings;
   }
@@ -143,7 +148,10 @@ function renderHumanSummary(ctx: CliContext, result: SyncResult): void {
         );
         break;
     }
-    if (outcome.status !== "failed") renderWholeRepoLines(ctx, outcome);
+    if (outcome.status !== "failed") {
+      renderWholeRepoLines(ctx, outcome);
+      renderClassificationLine(ctx, outcome);
+    }
     for (const warning of outcome.warnings) {
       ctx.logger.warning(`  ${formatWarning(warning)}`);
     }
@@ -152,7 +160,7 @@ function renderHumanSummary(ctx: CliContext, result: SyncResult): void {
     }
     if (ctx.flags.verbose && outcome.stateDetails && outcome.stateDetails.length > 0) {
       for (const detail of outcome.stateDetails) {
-        ctx.logger.verbose(`  ${detail.file} — state=${detail.state} (${detail.sourceOfTruth})`);
+        ctx.logger.verbose(`  ${formatDetail(detail)}`);
       }
     }
   }
@@ -218,8 +226,45 @@ function formatStateBreakdownSuffix(outcome: SyncOutcome): string {
 }
 
 function formatStateWarning(warning: StateWarning): string {
-  if (warning.type === "bad-inline-state") {
-    return `${warning.file}: inline state '${warning.raw}' is not in {draft, canon} — treated as missing`;
+  switch (warning.type) {
+    case "bad-inline-state":
+      return `${warning.file}: inline state '${warning.raw}' is not in {draft, canon} — treated as missing`;
+    case "bad-inline-category":
+      return `${warning.file}: inline category '${warning.raw}' is not a kebab-case slug — treated as missing`;
+    case "bad-inline-tags":
+      return `${warning.file}: inline tags '${warning.raw}' are not all kebab-case slugs — treated as missing`;
+    case "disagreement":
+      return `${warning.file}: inline ${warning.field} '${formatValue(warning.inline)}' overrides rule ${warning.field} '${formatValue(warning.rule)}'`;
   }
-  return `${warning.file}: inline state '${warning.inline}' overrides rule state '${warning.rule}'`;
+}
+
+function formatValue(value: string | string[]): string {
+  return Array.isArray(value) ? value.join(", ") : value;
+}
+
+/**
+ * `categories: spec 12 · adr 4 · unclassified 3 · tags: 7 distinct`. Omitted
+ * when nothing in the source carries a category or tag.
+ */
+function renderClassificationLine(ctx: CliContext, outcome: SyncOutcome): void {
+  const categories = outcome.categoryBreakdown;
+  const tags = outcome.tagRollup;
+  if (!categories || !tags) return;
+  const byCategory = Object.entries(categories.byCategory);
+  const distinctTags = Object.keys(tags.byTag).length;
+  if (byCategory.length === 0 && distinctTags === 0) return;
+  const parts = byCategory
+    .sort(([a, x], [b, y]) => y - x || a.localeCompare(b))
+    .map(([category, count]) => `${category} ${count}`);
+  if (categories.unclassified > 0) parts.push(`unclassified ${categories.unclassified}`);
+  const tagPart = distinctTags > 0 ? `tags: ${distinctTags} distinct` : "tags: none";
+  ctx.logger.info(`  categories: ${parts.join(" · ")} · ${tagPart}`);
+}
+
+/** Verbose per-file line: each field with where its value came from. */
+function formatDetail(detail: StateApplyDetail): string {
+  if (detail.sourceOfTruth === "untagged") return `${detail.file} — untagged (unsupported format)`;
+  const category = detail.category ?? "—";
+  const tags = detail.tags?.join(",") ?? "—";
+  return `${detail.file} — state=${detail.state} (${detail.sourceOfTruth}) · category=${category} (${detail.categorySource}) · tags=${tags} (${detail.tagsSource})`;
 }

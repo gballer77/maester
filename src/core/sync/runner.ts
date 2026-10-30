@@ -19,11 +19,13 @@ import type { FilterMode, WholeRepoReason } from "../sources/filter-mode.js";
 import { type OverlapTargets, realOverlapTargets } from "../sources/local-path.js";
 import { resolveSourceMode } from "../sources/source-mode.js";
 import {
+  type CategoryBreakdown,
   type StateApplyDetail,
   type StateApplyResult,
   type StateBreakdown,
   type StateWarning,
-  applyState,
+  type TagRollup,
+  applyInlineMetadata,
 } from "../state/applier.js";
 import { findDanglingLinks, stageLinks } from "./link.js";
 import {
@@ -70,6 +72,9 @@ export type SyncOutcome = {
   gitignoreEntry?: string;
   warnings: SyncWarning[];
   stateBreakdown?: StateBreakdown;
+  categoryBreakdown?: CategoryBreakdown;
+  tagRollup?: TagRollup;
+  /** Bad-inline and disagreement warnings for state, category and tags. */
   stateWarnings?: StateWarning[];
   stateDetails?: StateApplyDetail[];
   error?: string;
@@ -325,12 +330,14 @@ async function stageCopy(
     ...(tree.kind === "path" ? { files: tree.files } : {}),
     destination,
     marker: markerInput(source, tree, "copy"),
-    beforePromote: (stagedDir) => applyState(stagedDir, tree.rules),
+    beforePromote: (stagedDir) => applyInlineMetadata(stagedDir, tree.rules),
   });
   const stateResult = stageResult.beforePromoteResult;
   if (!stateResult) return {};
   return {
     stateBreakdown: stateResult.breakdown,
+    categoryBreakdown: stateResult.categoryBreakdown,
+    tagRollup: stateResult.tagRollup,
     stateWarnings: stateResult.warnings,
     stateDetails: stateResult.details,
   };
