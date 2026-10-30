@@ -111,6 +111,32 @@ describe("CLI: maester sync", () => {
     expect(result.stdout + result.stderr).toMatch(/no files matched includes/i);
   }, 30_000);
 
+  it("renders the whole-repository lines for a source without a manifest", async () => {
+    const remote = await createBareRemote({
+      files: [{ path: "README.md", contents: "# handbook\n" }],
+    });
+    remotes.push(remote);
+    await writeCitadelConfig(repo.path, {
+      schemaVersion: 1,
+      sources: [{ name: "handbook", url: toFileUrl(remote.bareRepoUrl), ref: "main" }],
+    });
+    const result = await runCli(["sync"], repo.path);
+    const output = result.stdout + result.stderr;
+    expect(result.code).toBe(0);
+    expect(output).toMatch(/handbook: added \([0-9a-f]{7}\) \(linked\)/);
+    expect(output).toMatch(
+      /whole repository \(1 file\(s\)\) — it has no includes and no maester\.yaml/,
+    );
+    expect(output).toContain("added /citadel/handbook/ to .gitignore");
+  }, 30_000);
+
+  it("lists the built-in excludes in sync --help", async () => {
+    const result = await runCli(["sync", "--help"], repo.path);
+    expect(result.stdout).toContain("Whole-repository sources:");
+    expect(result.stdout).toContain("**/node_modules/**");
+    expect(result.stdout).toContain("larger than 1024 KiB");
+  }, 30_000);
+
   it("scopes a sync run to a single source name", async () => {
     const a = await createBareRemote({ files: [{ path: "a.md", contents: "a\n" }] });
     const b = await createBareRemote({ files: [{ path: "b.md", contents: "b\n" }] });

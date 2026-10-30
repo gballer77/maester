@@ -64,8 +64,14 @@ describe("MaesterConfigSchema", () => {
     ).toBe(true);
   });
 
-  it("rejects an empty manifest", () => {
-    expect(MaesterConfigSchema.safeParse({ schemaVersion: 1, documents: [] }).success).toBe(false);
+  it("accepts an empty manifest (publishes the whole repository)", () => {
+    const result = MaesterConfigSchema.safeParse({ schemaVersion: 1, documents: [] });
+    expect(result.success).toBe(true);
+  });
+
+  it("defaults an omitted documents list to empty", () => {
+    const result = MaesterConfigSchema.safeParse({ schemaVersion: 1 });
+    expect(result.success && result.data.documents).toEqual([]);
   });
 
   it("rejects duplicate document paths", () => {

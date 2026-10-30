@@ -32,6 +32,26 @@ export class FixtureRemote {
   async cleanup(): Promise<void> {
     await rm(this.cleanupRoot, { recursive: true, force: true });
   }
+
+  /** Commit file writes and removals in the fixture's work tree and push them. */
+  async pushCommit(changes: { files?: FixtureRemoteFile[]; remove?: string[] }): Promise<void> {
+    const workTree = resolve(this.cleanupRoot, "work");
+    for (const file of changes.files ?? []) {
+      const dest = resolve(workTree, file.path);
+      await mkdir(dirname(dest), { recursive: true });
+      await writeFile(dest, file.contents, "utf8");
+    }
+    for (const path of changes.remove ?? []) {
+      await execFile("git", ["-C", workTree, "rm", "-q", "--", path], { env: ENV_OVERRIDE });
+    }
+    await execFile("git", ["-C", workTree, "add", "-A"], { env: ENV_OVERRIDE });
+    await execFile("git", ["-C", workTree, "commit", "-m", "update", "--quiet"], {
+      env: ENV_OVERRIDE,
+    });
+    await execFile("git", ["-C", workTree, "push", "origin", "HEAD", "--quiet"], {
+      env: ENV_OVERRIDE,
+    });
+  }
 }
 
 export async function createBareRemote(options: FixtureRemoteOptions): Promise<FixtureRemote> {

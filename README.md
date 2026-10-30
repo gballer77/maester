@@ -43,10 +43,11 @@ npx baller-maester publish      # maester manifest walkthrough — creates ./mae
 
 ## Pulling from sources you don't own
 
-Every entry in `citadel.yaml` is a **source** — a remote git repo. Each source is one of two modes, decided implicitly by whether you declare an `includes` list on it:
+Every entry in `citadel.yaml` is a **source** — a remote git repo. Each source resolves to one of three modes, checked in this order:
 
-- **Manifest-driven** (no `includes`): the remote repo publishes its own `maester.yaml` declaring what it offers. The remote owns the publish surface; the citadel just consumes it. Use this for repos you own.
-- **Includes-driven** (`includes` set): the citadel declares the filter set directly. The remote `maester.yaml` (if any) is ignored. Use this for public third-party repos, vendor docs you have read access to but cannot modify, and any other source that does not publish a manifest.
+1. **Includes-driven** (`includes` set): the citadel declares the filter set directly. The remote `maester.yaml` (if any) is ignored. Use this for public third-party repos and vendor docs you can read but not modify.
+2. **Manifest-driven** (no `includes`, remote `maester.yaml` lists ≥1 document): the remote owns the publish surface; the citadel just consumes it. Use this for repos you own.
+3. **Whole-repository** (no `includes`, and no `maester.yaml` or one with `documents: []`): every file in the repo is surfaced, minus excludes. A `maester.yaml` that fails validation is still an error — it never falls back to whole-repository.
 
 ```yaml
 # citadel.yaml (excerpt)
@@ -68,6 +69,27 @@ sources:
 ```
 
 `npx baller-maester sync` processes every source in one pass. The trade-off for the includes-driven mode: when the remote repo restructures, the citadel's `includes` may need to be updated. Sync prints a warning when an includes-driven source resolves to zero files so drift is visible.
+
+### Whole-repository sources are linked, not copied
+
+Whole-repository content is never committed into the citadel. Sync fills the destination with one symbolic link per file, pointing into the local cache at `.maester/cache/<name>/`, and adds the destination (e.g. `/citadel/handbook/`) to `.gitignore` the first time. Sync output labels the source `(linked)` and says why it resolved to whole-repository. Because links point into the cache, deleting `.maester/` leaves them dangling — `maester status` reports this as `behind` / `cache-missing`, and the next `maester sync` restores them. To get a committable copy, declare `includes` or publish manifest entries instead.
+
+These are always skipped (`maester sync --help` prints the list):
+
+- VCS, dependency and build directories: `.git`, `.hg`, `.svn`, `node_modules`, `bower_components`, `vendor`, `.venv`, `venv`, `__pycache__`, `.tox`, `Pods`, `dist`, `build`, `out`, `target`, `coverage`, `.next`, `.nuxt`, `.turbo`, `.cache`, `.gradle`, `.maester`, plus `.DS_Store` files
+- Binary files (a NUL byte in the first 8000 bytes) and files over 1 MiB
+
+Narrow it further with `excludes` on the source:
+
+```yaml
+  - name: handbook
+    url: https://github.com/example-org/handbook.git
+    excludes:
+      - archive/**
+      - "**/*.draft.md"
+```
+
+`excludes` only applies in whole-repository mode; on an includes- or manifest-driven source sync warns that it was ignored.
 
 ## Prerequisites
 

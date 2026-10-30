@@ -82,6 +82,12 @@ export const SourceSchema = z
       .array(IncludeEntrySchema)
       .min(1, "includes must declare at least one entry when present")
       .optional(),
+    // Applied only in whole-repository mode; ignored (with a sync warning)
+    // when the source is includes-driven or manifest-driven.
+    excludes: z
+      .array(IncludesPathSchema)
+      .min(1, "excludes must declare at least one entry when present")
+      .optional(),
     auth: AuthRefSchema.optional(),
     destination: z
       .string()

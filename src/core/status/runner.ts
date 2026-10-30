@@ -3,23 +3,43 @@ import type { CitadelConfig, Source } from "../../schemas/citadel.js";
 import { resolveAuth } from "../auth/resolver.js";
 import { defaultDestinationFor } from "../config/paths.js";
 import { AuthError, MaesterError, RefNotFoundError } from "../errors.js";
-import { readProvenanceMarker } from "../sync/provenance.js";
+import { type FilterMode, hasExplicitIncludes } from "../sources/filter-mode.js";
+import { findDanglingLinks } from "../sync/link.js";
+import {
+  type MaterializationMode,
+  type ProvenanceMarker,
+  readProvenanceMarker,
+} from "../sync/provenance.js";
 import { type ProbeContext, probeCommitSha, probeManifest } from "./probe.js";
 
 export type StatusVerdict = "up-to-date" | "behind" | "failed";
 
-export type BehindReason = "never-synced" | "remote-ref-advanced" | "manifest-changed";
+export type BehindReason =
+  | "never-synced"
+  | "remote-ref-advanced"
+  | "cache-missing"
+  | "manifest-changed";
+
+/**
+ * Fields on every outcome. `mode` / `filterMode` come from the last sync's
+ * marker and are absent for a never-synced source rather than guessed.
+ */
+export type StatusOutcomeBase = {
+  name: string;
+  kind: "git";
+  mode?: MaterializationMode;
+  filterMode?: FilterMode;
+};
 
 export type StatusOutcome =
-  | { name: string; verdict: "up-to-date"; commitSha: string }
-  | {
-      name: string;
+  | (StatusOutcomeBase & { verdict: "up-to-date"; commitSha: string })
+  | (StatusOutcomeBase & {
       verdict: "behind";
       reasons: readonly BehindReason[];
       commitSha?: string;
       resolvedSha?: string;
-    }
-  | { name: string; verdict: "failed"; error: string };
+    })
+  | (StatusOutcomeBase & { verdict: "failed"; error: string });
 
 export type StatusCounts = {
   upToDate: number;
@@ -108,12 +128,12 @@ async function checkSource(
 
   const marker = await readProvenanceMarker(destination);
   if (!marker) {
-    return {
-      name: source.name,
-      verdict: "behind",
-      reasons: ["never-synced"],
-    };
+    return { name: source.name, kind: "git", verdict: "behind", reasons: ["never-synced"] };
   }
+  const base = recordedBase(source.name, marker);
+
+  // Local and cheap: a link-mode destination whose cache vanished.
+  const cacheMissing = marker.mode === "link" && (await findDanglingLinks(destination)).length > 0;
 
   try {
     const auth = resolveAuth(source.auth, env);
@@ -123,39 +143,46 @@ async function checkSource(
     const resolvedSha = await probeCommitSha(source, probeCtx);
 
     const reasons: BehindReason[] = [];
-    if (resolvedSha !== marker.commitSha) {
-      reasons.push("remote-ref-advanced");
-    }
-
-    const isManifestDriven = !source.includes || source.includes.length === 0;
-    if (isManifestDriven) {
-      const { filterSet } = await probeManifest(source, probeCtx);
-      if (!filterSetsEqual(filterSet, marker.filterSet)) {
-        reasons.push("manifest-changed");
-      }
-    }
+    if (resolvedSha !== marker.commitSha) reasons.push("remote-ref-advanced");
+    if (cacheMissing) reasons.push("cache-missing");
+    if (await publishSurfaceChanged(source, marker, probeCtx)) reasons.push("manifest-changed");
 
     if (reasons.length === 0) {
-      return {
-        name: source.name,
-        verdict: "up-to-date",
-        commitSha: resolvedSha,
-      };
+      return { ...base, verdict: "up-to-date", commitSha: resolvedSha };
     }
-    return {
-      name: source.name,
-      verdict: "behind",
-      reasons,
-      commitSha: marker.commitSha,
-      resolvedSha,
-    };
+    return { ...base, verdict: "behind", reasons, commitSha: marker.commitSha, resolvedSha };
   } catch (err) {
-    return {
-      name: source.name,
-      verdict: "failed",
-      error: errorMessage(err),
-    };
+    return { ...base, verdict: "failed", error: errorMessage(err) };
   }
+}
+
+function recordedBase(name: string, marker: ProvenanceMarker): StatusOutcomeBase {
+  const base: StatusOutcomeBase = { name, kind: "git", mode: marker.mode };
+  if (marker.filterMode) base.filterMode = marker.filterMode;
+  return base;
+}
+
+/**
+ * True when the next sync would publish a different surface: the resolved
+ * filter mode moved (e.g. a manifest appeared upstream), the manifest's
+ * filter set changed, or a whole-repository source's effective excludes
+ * changed. A legacy marker without `filterMode` only compares filter sets.
+ */
+async function publishSurfaceChanged(
+  source: Source,
+  marker: ProvenanceMarker,
+  probeCtx: ProbeContext,
+): Promise<boolean> {
+  if (hasExplicitIncludes(source)) {
+    return marker.filterMode !== undefined && marker.filterMode !== "includes";
+  }
+  const probed = await probeManifest(source, probeCtx);
+  if (marker.filterMode !== undefined && marker.filterMode !== probed.filterMode) return true;
+  if (!filterSetsEqual(probed.filterSet, marker.filterSet)) return true;
+  if (probed.filterMode === "whole-repository") {
+    return !filterSetsEqual(probed.excludes ?? [], marker.excludes ?? []);
+  }
+  return false;
 }
 
 export function filterSetsEqual(a: readonly string[], b: readonly string[]): boolean {

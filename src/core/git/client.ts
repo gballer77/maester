@@ -84,6 +84,19 @@ export async function setSparsePatterns(
   await git.raw(["sparse-checkout", "set", "--no-cone", ...patterns]);
 }
 
+/**
+ * Add patterns to an existing no-cone sparse checkout and re-apply it. Used
+ * before manifest discovery on a cached tree, whose current pattern set may
+ * not include `maester.yaml` (e.g. a source that just dropped its includes).
+ */
+export async function addSparsePatterns(
+  workDir: string,
+  patterns: readonly string[],
+): Promise<void> {
+  if (patterns.length === 0) return;
+  await simpleGit(workDir).raw(["sparse-checkout", "add", ...patterns]);
+}
+
 export async function checkoutRef(workDir: string, ref: string | undefined): Promise<string> {
   const git = simpleGit(workDir);
   try {

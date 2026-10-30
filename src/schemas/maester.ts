@@ -28,9 +28,10 @@ export const PublishedDocumentSchema = z
 export const MaesterConfigSchema = z
   .object({
     schemaVersion: z.literal(1),
+    // An empty (or omitted) list means "publish the whole repository" —
+    // consuming citadels resolve such a source to whole-repository mode.
     documents: z
       .array(PublishedDocumentSchema)
-      .min(1, "at least one published document must be declared")
       .superRefine((docs, ctx) => {
         const seen = new Map<string, number>();
         for (let i = 0; i < docs.length; i++) {
@@ -47,7 +48,9 @@ export const MaesterConfigSchema = z
             seen.set(p, i);
           }
         }
-      }),
+      })
+      .optional()
+      .default([]),
   })
   .strict();
 

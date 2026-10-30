@@ -103,9 +103,15 @@ export async function runPublish(ctx: CliContext): Promise<number> {
   }
 
   if (documents.length === 0) {
-    ctx.prompts.log.error("A maester manifest must declare at least one document.");
-    ctx.prompts.outro("Cancelled — no files written.");
-    return 1;
+    const publishWhole = await ctx.prompts.confirm({
+      message:
+        "No documents added. Publish the whole repository? Citadels will link every file except built-in excludes (dependency/build folders, binaries, files over 1 MiB).",
+      initialValue: false,
+    });
+    if (!publishWhole) {
+      ctx.prompts.outro("Cancelled — no files written.");
+      return 0;
+    }
   }
 
   try {
@@ -116,17 +122,23 @@ export async function runPublish(ctx: CliContext): Promise<number> {
     return 1;
   }
 
-  const confirmWrite = await ctx.prompts.confirm({
-    message: `Write ${documents.length} document(s) to maester.yaml?`,
-    initialValue: true,
-  });
-  if (!confirmWrite) {
-    ctx.prompts.outro("Cancelled — no files written.");
-    return 0;
+  if (documents.length > 0) {
+    const confirmWrite = await ctx.prompts.confirm({
+      message: `Write ${documents.length} document(s) to maester.yaml?`,
+      initialValue: true,
+    });
+    if (!confirmWrite) {
+      ctx.prompts.outro("Cancelled — no files written.");
+      return 0;
+    }
   }
 
   const result = await finalizeMaesterManifest(ctx.repoRoot.path, documents);
-  ctx.prompts.log.success(`Wrote ${result.maesterPath} (${result.documentCount} document(s))`);
+  ctx.prompts.log.success(
+    result.documentCount === 0
+      ? `Wrote ${result.maesterPath} — the whole repository is published`
+      : `Wrote ${result.maesterPath} (${result.documentCount} document(s))`,
+  );
   ctx.prompts.outro("Consuming citadels will pick up this manifest at their next `maester sync`.");
   return 0;
 }

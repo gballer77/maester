@@ -1,6 +1,10 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { appendMissingGitignoreEntries } from "../../../../src/core/repo/gitignore.js";
+import {
+  appendMissingGitignoreEntries,
+  gitignoreEntryFor,
+  isIgnored,
+} from "../../../../src/core/repo/gitignore.js";
 import { type TempRepo, makeTmpRepo } from "../../../helpers/tmp-repo.js";
 
 let repo: TempRepo;
@@ -47,5 +51,34 @@ describe("appendMissingGitignoreEntries", () => {
     await appendMissingGitignoreEntries(repo.path, [".maester/"]);
     const text = await readFile(repo.resolve(".gitignore"), "utf8");
     expect(text).toBe("node_modules\n.maester/\n");
+  });
+});
+
+describe("gitignoreEntryFor", () => {
+  it("anchors the directory at the repo root with a trailing slash", () => {
+    expect(gitignoreEntryFor("citadel/handbook")).toBe("/citadel/handbook/");
+    expect(gitignoreEntryFor("/citadel/handbook/")).toBe("/citadel/handbook/");
+  });
+});
+
+describe("isIgnored", () => {
+  it("is false when nothing covers the directory", async () => {
+    expect(await isIgnored(repo.path, "citadel/handbook")).toBe(false);
+  });
+
+  it("matches an exact entry without git", async () => {
+    await writeFile(repo.resolve(".gitignore"), "/citadel/handbook/\n", "utf8");
+    expect(await isIgnored(repo.path, "citadel/handbook")).toBe(true);
+  });
+
+  it("honors a broader rule when the repo is a git repository", async () => {
+    const gitRepo = await makeTmpRepo({ withGit: true, withPackageJson: false });
+    try {
+      await writeFile(gitRepo.resolve(".gitignore"), "/citadel/\n", "utf8");
+      expect(await isIgnored(gitRepo.path, "citadel/handbook")).toBe(true);
+      expect(await isIgnored(gitRepo.path, "vendor/handbook")).toBe(false);
+    } finally {
+      await gitRepo.cleanup();
+    }
   });
 });

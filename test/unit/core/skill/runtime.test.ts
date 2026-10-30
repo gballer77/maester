@@ -61,7 +61,7 @@ describe("runtimePreread", () => {
   it("returns empty hook response when status is up-to-date", async () => {
     await writeCitadel();
     const runner = fakeRunStatus({
-      outcomes: [{ name: "docs", verdict: "up-to-date", commitSha: "abc" }],
+      outcomes: [{ name: "docs", kind: "git", verdict: "up-to-date", commitSha: "abc" }],
       counts: { upToDate: 1, behind: 0, failed: 0 },
     });
     const out = await runtimePreread(
@@ -78,6 +78,7 @@ describe("runtimePreread", () => {
       outcomes: [
         {
           name: "docs",
+          kind: "git",
           verdict: "behind",
           reasons: ["remote-ref-advanced"],
           commitSha: "old",
@@ -102,7 +103,7 @@ describe("runtimePreread", () => {
   it("emits additionalContext when failed (no blocking)", async () => {
     await writeCitadel();
     const runner = fakeRunStatus({
-      outcomes: [{ name: "docs", verdict: "failed", error: "ENETDOWN" }],
+      outcomes: [{ name: "docs", kind: "git", verdict: "failed", error: "ENETDOWN" }],
       counts: { upToDate: 0, behind: 0, failed: 1 },
     });
     const out = await runtimePreread(
@@ -116,7 +117,7 @@ describe("runtimePreread", () => {
   it("reuses the cached verdict within the debounce TTL", async () => {
     await writeCitadel();
     const runner = fakeRunStatus({
-      outcomes: [{ name: "docs", verdict: "up-to-date", commitSha: "abc" }],
+      outcomes: [{ name: "docs", kind: "git", verdict: "up-to-date", commitSha: "abc" }],
       counts: { upToDate: 1, behind: 0, failed: 0 },
     });
     let now = 1_000_000;
@@ -137,7 +138,7 @@ describe("runtimePreread", () => {
   it("re-checks after the cache TTL expires", async () => {
     await writeCitadel();
     const runner = fakeRunStatus({
-      outcomes: [{ name: "docs", verdict: "up-to-date", commitSha: "abc" }],
+      outcomes: [{ name: "docs", kind: "git", verdict: "up-to-date", commitSha: "abc" }],
       counts: { upToDate: 1, behind: 0, failed: 0 },
     });
     let now = 2_000_000;
@@ -157,7 +158,7 @@ describe("runtimePreread", () => {
   it("writes the cache atomically under .maester/.skill-cache.json", async () => {
     await writeCitadel();
     const runner = fakeRunStatus({
-      outcomes: [{ name: "docs", verdict: "up-to-date", commitSha: "abc" }],
+      outcomes: [{ name: "docs", kind: "git", verdict: "up-to-date", commitSha: "abc" }],
       counts: { upToDate: 1, behind: 0, failed: 0 },
     });
     await runtimePreread(
@@ -174,7 +175,7 @@ describe("runtimePreread", () => {
   it("honors MAESTER_SKILL_STATUS_TTL override", async () => {
     await writeCitadel();
     const runner = fakeRunStatus({
-      outcomes: [{ name: "docs", verdict: "up-to-date", commitSha: "abc" }],
+      outcomes: [{ name: "docs", kind: "git", verdict: "up-to-date", commitSha: "abc" }],
       counts: { upToDate: 1, behind: 0, failed: 0 },
     });
     let now = 10_000_000;
@@ -202,7 +203,7 @@ describe("runtimeStatusSummary", () => {
   it("returns exit 0 with an up-to-date summary", async () => {
     await writeCitadel();
     const runner = fakeRunStatus({
-      outcomes: [{ name: "docs", verdict: "up-to-date", commitSha: "abc" }],
+      outcomes: [{ name: "docs", kind: "git", verdict: "up-to-date", commitSha: "abc" }],
       counts: { upToDate: 1, behind: 0, failed: 0 },
     });
     const result = await runtimeStatusSummary({ repoRoot, runStatus: runner });
@@ -216,6 +217,7 @@ describe("runtimeStatusSummary", () => {
       outcomes: [
         {
           name: "docs",
+          kind: "git",
           verdict: "behind",
           reasons: ["remote-ref-advanced"],
         },
@@ -229,7 +231,7 @@ describe("runtimeStatusSummary", () => {
   it("returns exit 2 when at least one source failed", async () => {
     await writeCitadel();
     const runner = fakeRunStatus({
-      outcomes: [{ name: "docs", verdict: "failed", error: "boom" }],
+      outcomes: [{ name: "docs", kind: "git", verdict: "failed", error: "boom" }],
       counts: { upToDate: 0, behind: 0, failed: 1 },
     });
     const result = await runtimeStatusSummary({ repoRoot, runStatus: runner });

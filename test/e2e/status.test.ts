@@ -1,4 +1,5 @@
 import { execFile as execFileCb } from "node:child_process";
+import { rm } from "node:fs/promises";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runStatus } from "../../src/core/status/runner.js";
@@ -258,5 +259,81 @@ describe("runStatus against fixture bare repos", () => {
     expect(result.outcomes).toHaveLength(2);
     const verdicts = result.outcomes.map((o) => o.verdict).sort();
     expect(verdicts).toEqual(["failed", "up-to-date"]);
+  }, 60_000);
+});
+
+describe("runStatus: whole-repository sources", () => {
+  function config(url: string, extra: Partial<CitadelConfig["sources"][number]> = {}) {
+    return {
+      schemaVersion: 1,
+      sources: [{ name: "alpha", url, ref: "main", ...extra }],
+    } as CitadelConfig;
+  }
+
+  it("reports up-to-date with the recorded mode after a whole-repository sync", async () => {
+    const remote = await newRemote([{ path: "README.md", contents: "# alpha\n" }]);
+    await runSync(config(remote.bareRepoUrl), { repoRoot: repo.path });
+    const result = await runStatus(config(remote.bareRepoUrl), { repoRoot: repo.path });
+    expect(result.outcomes[0]).toMatchObject({
+      verdict: "up-to-date",
+      kind: "git",
+      mode: "link",
+      filterMode: "whole-repository",
+    });
+  }, 60_000);
+
+  it("shows no mode for a never-synced source", async () => {
+    const remote = await newRemote([{ path: "README.md", contents: "# alpha\n" }]);
+    const result = await runStatus(config(remote.bareRepoUrl), { repoRoot: repo.path });
+    expect(result.outcomes[0]?.verdict).toBe("behind");
+    expect(result.outcomes[0]?.mode).toBeUndefined();
+    expect(result.outcomes[0]?.filterMode).toBeUndefined();
+  }, 60_000);
+
+  it("reports manifest-changed when a manifest appears upstream", async () => {
+    const remote = await newRemote([{ path: "README.md", contents: "# alpha\n" }]);
+    await runSync(config(remote.bareRepoUrl), { repoRoot: repo.path });
+    await pushNewCommit(remote, [
+      { path: "maester.yaml", contents: "schemaVersion: 1\ndocuments:\n  - path: README.md\n" },
+    ]);
+    const result = await runStatus(config(remote.bareRepoUrl), { repoRoot: repo.path });
+    const outcome = result.outcomes[0];
+    expect(outcome?.verdict).toBe("behind");
+    if (outcome?.verdict === "behind") {
+      expect(outcome.reasons).toEqual(["remote-ref-advanced", "manifest-changed"]);
+    }
+  }, 60_000);
+
+  it("reports manifest-changed when the source's excludes change", async () => {
+    const remote = await newRemote([{ path: "README.md", contents: "# alpha\n" }]);
+    await runSync(config(remote.bareRepoUrl), { repoRoot: repo.path });
+    const result = await runStatus(config(remote.bareRepoUrl, { excludes: ["drafts/**"] }), {
+      repoRoot: repo.path,
+    });
+    const outcome = result.outcomes[0];
+    expect(outcome?.verdict).toBe("behind");
+    if (outcome?.verdict === "behind") expect(outcome.reasons).toEqual(["manifest-changed"]);
+  }, 60_000);
+
+  it("reports cache-missing when the cache is deleted, and sync fixes it", async () => {
+    const remote = await newRemote([{ path: "README.md", contents: "# alpha\n" }]);
+    await runSync(config(remote.bareRepoUrl), { repoRoot: repo.path });
+    await rm(repo.resolve(".maester"), { recursive: true, force: true });
+    const before = await runStatus(config(remote.bareRepoUrl), { repoRoot: repo.path });
+    const outcome = before.outcomes[0];
+    expect(outcome?.verdict).toBe("behind");
+    if (outcome?.verdict === "behind") expect(outcome.reasons).toEqual(["cache-missing"]);
+
+    await runSync(config(remote.bareRepoUrl), { repoRoot: repo.path });
+    const after = await runStatus(config(remote.bareRepoUrl), { repoRoot: repo.path });
+    expect(after.outcomes[0]?.verdict).toBe("up-to-date");
+  }, 60_000);
+
+  it("still fails a source whose remote manifest is invalid", async () => {
+    const remote = await newRemote([{ path: "README.md", contents: "# alpha\n" }]);
+    await runSync(config(remote.bareRepoUrl), { repoRoot: repo.path });
+    await pushNewCommit(remote, [{ path: "maester.yaml", contents: "schemaVersion: 99\n" }]);
+    const result = await runStatus(config(remote.bareRepoUrl), { repoRoot: repo.path });
+    expect(result.outcomes[0]).toMatchObject({ verdict: "failed", mode: "link" });
   }, 60_000);
 });

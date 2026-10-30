@@ -281,7 +281,7 @@ async function collectOneSource(
 async function collectIncludes(ctx: CliContext): Promise<IncludeEntry[]> {
   const useExplicit = await ctx.prompts.confirm({
     message:
-      "Declare an explicit `includes` list? (Skip to let the source's own maester.yaml manifest drive what gets pulled.)",
+      "Declare an explicit `includes` list? (Skip to use the source's maester.yaml if it has one; otherwise the whole repository is linked in, minus built-in excludes.)",
     initialValue: false,
   });
   if (!useExplicit) return [];

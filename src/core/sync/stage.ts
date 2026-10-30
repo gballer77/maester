@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { DestinationBlockedError } from "../errors.js";
 import {
   PROVENANCE_FILENAME,
-  type ProvenanceMarker,
+  type ProvenanceMarkerInput,
   readProvenanceMarker,
   writeProvenanceMarker,
 } from "./provenance.js";
@@ -12,7 +12,7 @@ import {
 export type StageInput<TApply = unknown> = {
   cacheDir: string;
   destination: string;
-  marker: ProvenanceMarker;
+  marker: ProvenanceMarkerInput;
   /**
    * Optional hook invoked against the staged copy AFTER the cache has been
    * copied and BEFORE the provenance marker is written + the atomic promote.
@@ -57,7 +57,10 @@ async function copyCacheToTemp(cacheDir: string, tempDir: string): Promise<void>
   }
 }
 
-async function promoteTempToDestination(tempDir: string, destination: string): Promise<void> {
+export async function promoteTempToDestination(
+  tempDir: string,
+  destination: string,
+): Promise<void> {
   if (existsSync(destination)) {
     const backup = `${destination}.old-${Math.random().toString(36).slice(2, 10)}`;
     await rename(destination, backup);

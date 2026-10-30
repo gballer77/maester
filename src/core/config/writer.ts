@@ -50,9 +50,16 @@ export async function writeCitadelConfig(repoRoot: string, config: CitadelConfig
   return path;
 }
 
+const WHOLE_REPOSITORY_NOTE = `# An empty \`documents\` list publishes the WHOLE repository: citadels link
+# every file except built-in excludes (VCS, dependency and build directories,
+# binaries, files over 1 MiB). Add entries here to publish a narrower set.
+
+`;
+
 export async function writeMaesterConfig(repoRoot: string, config: MaesterConfig): Promise<string> {
   const path = maesterConfigPath(repoRoot);
   const body = stringify(config, { indent: 2, lineWidth: 100, singleQuote: false });
-  await writeFile(path, `${MAESTER_HEADER}${body}`, "utf8");
+  const note = config.documents.length === 0 ? WHOLE_REPOSITORY_NOTE : "";
+  await writeFile(path, `${MAESTER_HEADER}${note}${body}`, "utf8");
   return path;
 }

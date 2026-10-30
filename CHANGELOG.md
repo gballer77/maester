@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Whole-repository sources.** A git source with no `includes` whose repo has no `maester.yaml` (or one with `documents: []`) now syncs every file instead of failing. The content is **linked, never copied**: the destination holds per-file symlinks into `.maester/cache/<name>/` and is added to `.gitignore` on first sync. Built-in excludes skip VCS, dependency and build directories, binary files, and files over 1 MiB; `maester sync --help` lists them.
+- **`excludes` on citadel sources** to narrow a whole-repository source. Ignored with a warning in includes- and manifest-driven modes.
+- **Sync output and `--json`** carry `mode`, `filterMode`, `wholeRepoReason`, `fileCount`, `skipped` and `gitignoreEntry`. A source switching from copied to linked gets a `destination-ignored` warning with the `git rm -r --cached` to run.
+- **`maester status` shows each source's recorded mode** (`[whole-repository, linked]`), carries `kind` / `mode` / `filterMode` in `--json`, and reports a new `cache-missing` reason when a linked destination's cache is gone.
+- **`maester publish` can finish with zero documents** after confirming that this publishes the whole repository; it writes `documents: []` with an explanatory comment.
+
+### Changed
+- **`maester.yaml` `documents` may be empty or omitted** (treated as whole-repository).
+- **`manifest-changed` in status** now also fires when the resolved filter mode changes (e.g. a manifest appears upstream) or a whole-repository source's excludes change.
+- **Provenance marker v2** (`.maester-source.json`) records `markerVersion`, `kind`, `mode`, `filterMode` and `excludes`. Older markers are read as copy-mode and upgraded on the next sync.
+- `maester init` now explains that skipping `includes` means "use the source's maester.yaml if present, otherwise link the whole repository."
+
+### Removed
+- The `MAESTER_MANIFEST_MISSING` sync error — a missing manifest is now whole-repository mode. An invalid manifest still fails with `MAESTER_MANIFEST_INVALID`.
+
 ## [0.5.0] - 2026-05-21
 
 ### Added

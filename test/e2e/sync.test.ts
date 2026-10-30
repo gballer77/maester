@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { lstat, readFile, rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PROVENANCE_FILENAME } from "../../src/core/sync/provenance.js";
@@ -300,20 +300,6 @@ describe("runSync against fixture bare repos", () => {
     expect(existsSync(repo.resolve("citadel/alpha/README.md"))).toBe(true);
   }, 30_000);
 
-  it("fails a source when the remote does not publish a maester.yaml and no includes are declared", async () => {
-    const remote = await newRemote([{ path: "README.md", contents: "# alpha\n" }]);
-    const config: CitadelConfig = {
-      schemaVersion: 1,
-      sources: [{ name: "alpha", url: remote.bareRepoUrl, ref: "main" }],
-    };
-    const result = await runSync(config, { repoRoot: repo.path });
-    expect(result.failed).toBe(1);
-    const outcome = result.outcomes[0];
-    expect(outcome?.status).toBe("failed");
-    expect(outcome?.error).toMatch(/manifest/i);
-    expect(existsSync(repo.resolve("citadel/alpha/README.md"))).toBe(false);
-  }, 30_000);
-
   it("fails a source when the published maester.yaml is schema-invalid", async () => {
     const remote = await newRemote([
       { path: "maester.yaml", contents: "schemaVersion: 99\ndocuments: []\n" },
@@ -352,5 +338,168 @@ describe("runSync against fixture bare repos", () => {
     expect(result.failed).toBe(0);
     expect(existsSync(repo.resolve("elsewhere/alpha/README.md"))).toBe(true);
     expect(existsSync(repo.resolve("vendor/alpha/README.md"))).toBe(false);
+  }, 30_000);
+});
+
+describe("runSync: whole-repository sources (link-only)", () => {
+  function wholeRepoConfig(url: string, extra: Partial<CitadelConfig["sources"][number]> = {}) {
+    return {
+      schemaVersion: 1,
+      sources: [{ name: "alpha", url, ref: "main", ...extra }],
+    } as CitadelConfig;
+  }
+
+  async function isLink(rel: string): Promise<boolean> {
+    return (await lstat(repo.resolve(rel))).isSymbolicLink();
+  }
+
+  async function gitignore(): Promise<string> {
+    const path = repo.resolve(".gitignore");
+    return existsSync(path) ? readFile(path, "utf8") : "";
+  }
+
+  it("links every file of a repo without a manifest and gitignores the destination", async () => {
+    const remote = await newRemote([
+      { path: "README.md", contents: "# alpha\n" },
+      { path: "guides/setup.md", contents: "setup\n" },
+    ]);
+    const result = await runSync(wholeRepoConfig(remote.bareRepoUrl), { repoRoot: repo.path });
+    expect(result.failed).toBe(0);
+    const outcome = result.outcomes[0];
+    expect(outcome).toMatchObject({
+      status: "added",
+      mode: "link",
+      filterMode: "whole-repository",
+      wholeRepoReason: "no-manifest",
+      fileCount: 2,
+      gitignoreEntry: "/citadel/alpha/",
+    });
+    expect(await isLink("citadel/alpha/README.md")).toBe(true);
+    expect(await readFile(repo.resolve("citadel/alpha/guides/setup.md"), "utf8")).toBe("setup\n");
+    expect(await gitignore()).toContain("/citadel/alpha/");
+    const marker = JSON.parse(
+      await readFile(repo.resolve(`citadel/alpha/${PROVENANCE_FILENAME}`), "utf8"),
+    );
+    expect(marker).toMatchObject({ mode: "link", filterMode: "whole-repository" });
+  }, 30_000);
+
+  it("treats a manifest with no documents as whole-repository", async () => {
+    const remote = await newRemote([
+      { path: "maester.yaml", contents: "schemaVersion: 1\ndocuments: []\n" },
+      { path: "README.md", contents: "# alpha\n" },
+    ]);
+    const result = await runSync(wholeRepoConfig(remote.bareRepoUrl), { repoRoot: repo.path });
+    expect(result.outcomes[0]).toMatchObject({
+      status: "added",
+      mode: "link",
+      wholeRepoReason: "empty-manifest",
+    });
+    expect(await isLink("citadel/alpha/README.md")).toBe(true);
+  }, 30_000);
+
+  it("reports unchanged on re-sync and does not duplicate the gitignore entry", async () => {
+    const remote = await newRemote([{ path: "README.md", contents: "# alpha\n" }]);
+    const config = wholeRepoConfig(remote.bareRepoUrl);
+    await runSync(config, { repoRoot: repo.path });
+    const second = await runSync(config, { repoRoot: repo.path });
+    expect(second.outcomes[0]?.status).toBe("unchanged");
+    expect(second.outcomes[0]?.gitignoreEntry).toBeUndefined();
+    expect((await gitignore()).split("/citadel/alpha/").length - 1).toBe(1);
+  }, 30_000);
+
+  it("removes the link when the file is deleted upstream", async () => {
+    const remote = await newRemote([
+      { path: "README.md", contents: "# alpha\n" },
+      { path: "old.md", contents: "old\n" },
+    ]);
+    const config = wholeRepoConfig(remote.bareRepoUrl);
+    await runSync(config, { repoRoot: repo.path });
+    await remote.pushCommit({ remove: ["old.md"] });
+    const result = await runSync(config, { repoRoot: repo.path });
+    expect(result.outcomes[0]?.status).toBe("updated");
+    expect(existsSync(repo.resolve("citadel/alpha/old.md"))).toBe(false);
+    expect(existsSync(repo.resolve("citadel/alpha/README.md"))).toBe(true);
+  }, 30_000);
+
+  it("re-links after the cache is removed", async () => {
+    const remote = await newRemote([{ path: "README.md", contents: "# alpha\n" }]);
+    const config = wholeRepoConfig(remote.bareRepoUrl);
+    await runSync(config, { repoRoot: repo.path });
+    await rm(repo.resolve(".maester"), { recursive: true, force: true });
+    expect(existsSync(repo.resolve("citadel/alpha/README.md"))).toBe(false);
+    const result = await runSync(config, { repoRoot: repo.path });
+    // Re-cloning restores the targets, so the existing relative links resolve again.
+    expect(result.failed).toBe(0);
+    expect(await readFile(repo.resolve("citadel/alpha/README.md"), "utf8")).toBe("# alpha\n");
+  }, 30_000);
+
+  it("never links built-in excludes, binaries, or oversize files; honours source excludes", async () => {
+    const remote = await newRemote([
+      { path: "README.md", contents: "# alpha\n" },
+      { path: "node_modules/pkg/index.js", contents: "module.exports = 1;\n" },
+      { path: "docs/nested/dist/out.md", contents: "built\n" },
+      { path: "logo.bin", contents: "PNG\u0000\u0001data" },
+      { path: "huge.md", contents: "x".repeat(1024 * 1024 + 1) },
+      { path: "archive/old.md", contents: "old\n" },
+    ]);
+    const result = await runSync(
+      wholeRepoConfig(remote.bareRepoUrl, { excludes: ["archive/**"] }),
+      { repoRoot: repo.path },
+    );
+    const outcome = result.outcomes[0];
+    expect(outcome?.status).toBe("added");
+    expect(outcome?.fileCount).toBe(1);
+    expect(outcome?.skipped).toMatchObject({ binary: 1, oversize: 1 });
+    expect(existsSync(repo.resolve("citadel/alpha/README.md"))).toBe(true);
+    for (const rel of [
+      "node_modules/pkg/index.js",
+      "docs/nested/dist/out.md",
+      "logo.bin",
+      "huge.md",
+      "archive/old.md",
+    ]) {
+      expect(existsSync(repo.resolve(`citadel/alpha/${rel}`))).toBe(false);
+    }
+  }, 30_000);
+
+  it("warns when a copied destination switches to linked", async () => {
+    const remote = await newRemote([{ path: "README.md", contents: "# alpha\n" }]);
+    await runSync(wholeRepoConfig(remote.bareRepoUrl, { includes: ["README.md"] }), {
+      repoRoot: repo.path,
+    });
+    expect(await isLink("citadel/alpha/README.md")).toBe(false);
+    const result = await runSync(wholeRepoConfig(remote.bareRepoUrl), { repoRoot: repo.path });
+    expect(result.outcomes[0]?.status).toBe("updated");
+    expect(result.outcomes[0]?.warnings).toContainEqual({
+      type: "destination-ignored",
+      name: "alpha",
+      transition: "copy-to-link",
+      destination: "citadel/alpha",
+    });
+    expect(await isLink("citadel/alpha/README.md")).toBe(true);
+  }, 30_000);
+
+  it("warns that excludes are ignored on an includes-driven source", async () => {
+    const remote = await newRemote([{ path: "README.md", contents: "# alpha\n" }]);
+    const result = await runSync(
+      wholeRepoConfig(remote.bareRepoUrl, { includes: ["README.md"], excludes: ["x/**"] }),
+      { repoRoot: repo.path },
+    );
+    expect(result.outcomes[0]?.mode).toBe("copy");
+    expect(result.outcomes[0]?.warnings).toContainEqual({
+      type: "excludes-ignored",
+      name: "alpha",
+      filterMode: "includes",
+    });
+  }, 30_000);
+
+  it("keeps the cache (and existing links) when a link-mode re-sync fails", async () => {
+    const remote = await newRemote([{ path: "README.md", contents: "# alpha\n" }]);
+    await runSync(wholeRepoConfig(remote.bareRepoUrl), { repoRoot: repo.path });
+    const result = await runSync(wholeRepoConfig(remote.bareRepoUrl, { ref: "no-such-branch" }), {
+      repoRoot: repo.path,
+    });
+    expect(result.outcomes[0]?.status).toBe("failed");
+    expect(await readFile(repo.resolve("citadel/alpha/README.md"), "utf8")).toBe("# alpha\n");
   }, 30_000);
 });

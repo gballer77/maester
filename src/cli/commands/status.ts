@@ -75,20 +75,21 @@ export async function runStatusCommand(
 }
 
 function buildJsonOutcome(outcome: StatusOutcome): Record<string, unknown> {
-  if (outcome.verdict === "up-to-date") {
-    return { name: outcome.name, verdict: outcome.verdict, commitSha: outcome.commitSha };
-  }
+  const base: Record<string, unknown> = {
+    name: outcome.name,
+    verdict: outcome.verdict,
+    kind: outcome.kind,
+  };
+  if (outcome.mode !== undefined) base.mode = outcome.mode;
+  if (outcome.filterMode !== undefined) base.filterMode = outcome.filterMode;
+  if (outcome.verdict === "up-to-date") return { ...base, commitSha: outcome.commitSha };
   if (outcome.verdict === "behind") {
-    const base: Record<string, unknown> = {
-      name: outcome.name,
-      verdict: outcome.verdict,
-      reasons: outcome.reasons,
-    };
+    base.reasons = outcome.reasons;
     if (outcome.commitSha !== undefined) base.commitSha = outcome.commitSha;
     if (outcome.resolvedSha !== undefined) base.resolvedSha = outcome.resolvedSha;
     return base;
   }
-  return { name: outcome.name, verdict: outcome.verdict, error: redactUrl(outcome.error) };
+  return { ...base, error: redactUrl(outcome.error) };
 }
 
 function renderHumanSummary(ctx: CliContext, result: StatusResult): void {
@@ -97,15 +98,16 @@ function renderHumanSummary(ctx: CliContext, result: StatusResult): void {
     return;
   }
   for (const outcome of result.outcomes) {
+    const mode = formatMode(outcome);
     switch (outcome.verdict) {
       case "up-to-date":
-        ctx.logger.success(`${outcome.name}: up to date (${shortSha(outcome.commitSha)})`);
+        ctx.logger.success(`${outcome.name}: up to date (${shortSha(outcome.commitSha)})${mode}`);
         break;
       case "behind":
-        ctx.logger.warning(`${outcome.name}: behind — ${formatReasons(outcome)}`);
+        ctx.logger.warning(`${outcome.name}: behind — ${formatReasons(outcome)}${mode}`);
         break;
       case "failed":
-        ctx.logger.error(`${outcome.name}: failed — ${redactUrl(outcome.error)}`);
+        ctx.logger.error(`${outcome.name}: failed — ${redactUrl(outcome.error)}${mode}`);
         break;
     }
   }
@@ -150,9 +152,18 @@ function formatReason(
       const remote = outcome.resolvedSha ? shortSha(outcome.resolvedSha) : "—";
       return `remote ref advanced (recorded ${recorded}, remote ${remote})`;
     }
+    case "cache-missing":
+      return "local cache missing — linked files no longer resolve";
     case "manifest-changed":
-      return "remote maester.yaml publish surface changed";
+      return "publish surface changed (remote maester.yaml, filter mode, or excludes)";
   }
+}
+
+/** The mode recorded by the last sync; empty for never-synced sources. */
+function formatMode(outcome: StatusOutcome): string {
+  if (!outcome.filterMode) return "";
+  const linked = outcome.mode === "link" ? ", linked" : "";
+  return `  [${outcome.filterMode}${linked}]`;
 }
 
 function shortSha(sha: string): string {

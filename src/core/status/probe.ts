@@ -9,10 +9,14 @@ import {
   setSparsePatterns,
   shallowSparseClone,
 } from "../git/client.js";
-import { discoverManifestFromCache } from "../sources/fetcher.js";
+import {
+  type FilterMode,
+  MAESTER_MANIFEST_FILENAME,
+  readManifestProbe,
+  resolveFilterMode,
+} from "../sources/filter-mode.js";
 
 const SHA_RE = /^[0-9a-f]{40}$/;
-const MAESTER_MANIFEST_FILENAME = "maester.yaml";
 const STATUS_TEMP_PREFIX = ".status-";
 
 export type ProbeContext = {
@@ -21,7 +25,10 @@ export type ProbeContext = {
 };
 
 export type ManifestProbeResult = {
+  filterMode: Exclude<FilterMode, "includes">;
   filterSet: readonly string[];
+  /** Whole-repository mode only: the effective exclude list sync would apply. */
+  excludes?: readonly string[];
 };
 
 export async function probeCommitSha(source: Source, ctx: ProbeContext): Promise<string> {
@@ -51,25 +58,23 @@ export async function probeManifest(
     });
     await setSparsePatterns(tempDir, [MAESTER_MANIFEST_FILENAME]);
     await checkoutRef(tempDir, source.ref);
-    const discovery = await discoverManifestFromCache(tempDir);
-    if (discovery.mode === "no-manifest") {
-      throw manifestError(source.name, discovery.reason);
+    const resolution = resolveFilterMode(
+      { excludes: source.excludes },
+      await readManifestProbe(tempDir),
+    );
+    switch (resolution.mode) {
+      case "invalid-manifest":
+        throw new MaesterError(
+          "MAESTER_MANIFEST_INVALID",
+          `source '${source.name}' publishes a maester.yaml that failed schema validation.`,
+        );
+      case "whole-repository":
+        // Must mirror what sync records for whole-repository markers.
+        return { filterMode: resolution.mode, filterSet: ["**"], excludes: resolution.excludes };
+      default:
+        return { filterMode: "manifest", filterSet: resolution.patterns };
     }
-    return { filterSet: discovery.patterns };
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
-}
-
-function manifestError(name: string, reason: "absent" | "invalid"): MaesterError {
-  if (reason === "absent") {
-    return new MaesterError(
-      "MAESTER_MANIFEST_MISSING",
-      `source '${name}' does not publish a maester.yaml manifest at the configured ref.`,
-    );
-  }
-  return new MaesterError(
-    "MAESTER_MANIFEST_INVALID",
-    `source '${name}' publishes a maester.yaml that failed schema validation.`,
-  );
 }

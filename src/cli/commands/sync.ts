@@ -1,9 +1,14 @@
 import type { Command } from "commander";
 import { loadCitadelConfig } from "../../core/config/loader.js";
 import { MaesterError } from "../../core/errors.js";
-import type { FetchWarning } from "../../core/sources/fetcher.js";
+import { BUILTIN_EXCLUDES, WHOLE_REPO_MAX_FILE_BYTES } from "../../core/sources/excludes.js";
 import type { StateWarning } from "../../core/state/applier.js";
-import { type SyncOutcome, type SyncResult, runSync } from "../../core/sync/runner.js";
+import {
+  type SyncOutcome,
+  type SyncResult,
+  type SyncWarning,
+  runSync,
+} from "../../core/sync/runner.js";
 import type { CitadelConfig } from "../../schemas/citadel.js";
 import { redactUrl } from "../../ui/logger.js";
 import type { CliContext } from "../context.js";
@@ -16,10 +21,31 @@ export function registerSync(program: Command, getContext: () => CliContext): vo
     .option("--concurrency <n>", "Override the per-run source concurrency (default: 4)", (v) =>
       Number(v),
     )
+    .addHelpText("after", wholeRepositoryHelp())
     .action(async (names: string[], options: { concurrency?: number }) => {
       const code = await runSyncCommand(getContext(), names, options.concurrency);
       process.exitCode = code;
     });
+}
+
+function wholeRepositoryHelp(): string {
+  const maxKiB = WHOLE_REPO_MAX_FILE_BYTES / 1024;
+  return [
+    "",
+    "Whole-repository sources:",
+    "  A git source with no `includes`, pointing at a repo with no maester.yaml",
+    "  (or one with an empty `documents` list), surfaces every file in the repo.",
+    "  Those files are linked into the citadel from .maester/cache/<name>/ —",
+    "  never copied — and the destination is added to .gitignore.",
+    "",
+    "  Always skipped:",
+    ...BUILTIN_EXCLUDES.map((pattern) => `    ${pattern}`),
+    `    files larger than ${maxKiB} KiB`,
+    "    binary files (a NUL byte in the first 8000 bytes)",
+    "",
+    "  Narrow the set with `excludes` on the source, declare `includes`, or",
+    "  publish a maester.yaml from the source repo.",
+  ].join("\n");
 }
 
 export async function runSyncCommand(
@@ -70,6 +96,12 @@ function buildJsonOutcome(outcome: SyncOutcome): Record<string, unknown> {
   };
   if (outcome.ref !== undefined) base.ref = outcome.ref;
   if (outcome.commitSha !== undefined) base.commitSha = outcome.commitSha;
+  if (outcome.mode !== undefined) base.mode = outcome.mode;
+  if (outcome.filterMode !== undefined) base.filterMode = outcome.filterMode;
+  if (outcome.wholeRepoReason !== undefined) base.wholeRepoReason = outcome.wholeRepoReason;
+  if (outcome.fileCount !== undefined) base.fileCount = outcome.fileCount;
+  if (outcome.skipped !== undefined) base.skipped = outcome.skipped;
+  if (outcome.gitignoreEntry !== undefined) base.gitignoreEntry = outcome.gitignoreEntry;
   if (outcome.warnings.length > 0) {
     base.warnings = outcome.warnings.map(serializeWarning);
   }
@@ -83,27 +115,24 @@ function buildJsonOutcome(outcome: SyncOutcome): Record<string, unknown> {
   return base;
 }
 
-function serializeWarning(warning: FetchWarning): Record<string, unknown> {
-  return {
-    type: warning.type,
-    name: warning.name,
-    includes: warning.includes,
-  };
+function serializeWarning(warning: SyncWarning): Record<string, unknown> {
+  return { ...warning };
 }
 
 function renderHumanSummary(ctx: CliContext, result: SyncResult): void {
   for (const outcome of result.outcomes) {
     const shortSha = outcome.commitSha?.slice(0, 7) ?? "—";
     const stateSuffix = formatStateBreakdownSuffix(outcome);
+    const linked = outcome.mode === "link" ? " (linked)" : "";
     switch (outcome.status) {
       case "added":
-        ctx.logger.success(`${outcome.name}: added (${shortSha})${stateSuffix}`);
+        ctx.logger.success(`${outcome.name}: added (${shortSha})${linked}${stateSuffix}`);
         break;
       case "updated":
-        ctx.logger.success(`${outcome.name}: updated (${shortSha})${stateSuffix}`);
+        ctx.logger.success(`${outcome.name}: updated (${shortSha})${linked}${stateSuffix}`);
         break;
       case "unchanged":
-        ctx.logger.info(`${outcome.name}: unchanged`);
+        ctx.logger.info(`${outcome.name}: unchanged${linked}`);
         break;
       case "failed":
         ctx.logger.error(
@@ -111,6 +140,7 @@ function renderHumanSummary(ctx: CliContext, result: SyncResult): void {
         );
         break;
     }
+    if (outcome.status !== "failed") renderWholeRepoLines(ctx, outcome);
     for (const warning of outcome.warnings) {
       ctx.logger.warning(`  ${formatWarning(warning)}`);
     }
@@ -131,8 +161,40 @@ function renderHumanSummary(ctx: CliContext, result: SyncResult): void {
   ctx.logger.success(`All ${result.outcomes.length} source(s) up to date.`);
 }
 
-function formatWarning(warning: FetchWarning): string {
-  return `no files matched includes — citadel-side filter set may need updating (${warning.includes.join(", ")})`;
+function renderWholeRepoLines(ctx: CliContext, outcome: SyncOutcome): void {
+  if (outcome.filterMode === "whole-repository") {
+    const why =
+      outcome.wholeRepoReason === "empty-manifest"
+        ? "its maester.yaml lists no documents"
+        : "it has no includes and no maester.yaml";
+    const count = outcome.fileCount !== undefined ? ` (${outcome.fileCount} file(s))` : "";
+    ctx.logger.info(`  whole repository${count} — ${why}`);
+    ctx.logger.info(
+      "  narrow it with `excludes`, declare `includes`, or publish a maester.yaml upstream",
+    );
+  }
+  if (outcome.gitignoreEntry) {
+    ctx.logger.info(`  added ${outcome.gitignoreEntry} to .gitignore`);
+  }
+  if (ctx.flags.verbose && outcome.skipped) {
+    const { excluded, binary, oversize } = outcome.skipped;
+    ctx.logger.verbose(
+      `  skipped: ${excluded} excluded · ${binary} binary · ${oversize} over size cap`,
+    );
+  }
+}
+
+function formatWarning(warning: SyncWarning): string {
+  switch (warning.type) {
+    case "no-matches":
+      return `no files matched includes — citadel-side filter set may need updating (${warning.includes.join(", ")})`;
+    case "excludes-ignored":
+      return `excludes ignored — they only apply to whole-repository sources (this source is ${warning.filterMode}-driven)`;
+    case "destination-ignored":
+      return warning.transition === "copy-to-link"
+        ? `${warning.destination} switched from copied to linked and is now gitignored — previously committed copies stay in git history; run \`git rm -r --cached ${warning.destination}\` to stop tracking them`
+        : `${warning.destination} switched from linked to copied but is still gitignored — remove its .gitignore entry to commit the copies`;
+  }
 }
 
 function formatStateBreakdownSuffix(outcome: SyncOutcome): string {

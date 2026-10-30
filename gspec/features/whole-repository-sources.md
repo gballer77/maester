@@ -59,53 +59,53 @@ spec-version: v1
 
 ## 4. Capabilities
 
-- [ ] **P0**: Sync resolves each source's mode using the defined precedence
+- [x] **P0**: Sync resolves each source's mode using the defined precedence
   - Non-empty citadel `includes` → includes-driven, regardless of remote manifest
   - Remote `maester.yaml` with ≥1 published entry and no citadel `includes` → manifest-driven
   - Remote `maester.yaml` with zero published entries and no citadel `includes` → whole-repository
   - No remote `maester.yaml` and no citadel `includes` → whole-repository (no longer an error)
 
-- [ ] **P0**: Whole-repository mode surfaces every file in the remote repo at the configured ref, minus excludes
+- [x] **P0**: Whole-repository mode surfaces every file in the remote repo at the configured ref, minus excludes
   - Every file at the resolved commit appears in the source's destination as a link to the locally fetched copy, preserving relative paths
   - Files matching the built-in exclude list or the source's `excludes` are not linked
   - Re-running sync is idempotent: unchanged remote content produces no destination changes
   - Files deleted or newly excluded upstream are removed from the destination on the next sync, consistent with other modes
 
-- [ ] **P0**: Whole-repository content is linked, never copied
+- [x] **P0**: Whole-repository content is linked, never copied
   - The destination is added to the repository's ignore file on the first whole-repository sync if not already covered, and the sync output names the entry it wrote
   - A source that explicitly requests copy materialization and resolves to whole-repository mode fails with a message explaining how to get a committable copy (declare `includes` or publish manifest entries); other sources continue
   - If the locally fetched copy is removed, status reports the source as needing a sync rather than silently serving dangling links
 
-- [ ] **P0**: A built-in default exclude list applies in whole-repository mode
+- [x] **P0**: A built-in default exclude list applies in whole-repository mode
   - VCS metadata directories are always excluded
   - Common dependency/vendor directories and build output directories are excluded by default
   - Binary and very large files are excluded by default
   - The built-in list is documented in user-facing help so users know what is skipped
 
-- [ ] **P0**: Sync output clearly flags whole-repository sources
+- [x] **P0**: Sync output clearly flags whole-repository sources
   - Each source synced in whole-repository mode is labelled as such in the per-source result line
   - The label states *why* (no `includes` and no manifest, or manifest with no entries)
   - The message points to how to narrow the pull (add `includes`, add `excludes`, or publish entries in the remote `maester.yaml`)
 
-- [ ] **P0**: Sync metadata records the resolved mode
+- [x] **P0**: Sync metadata records the resolved mode
   - Each source's metadata record includes the mode (`includes`, `manifest`, or `whole-repository`)
   - In whole-repository mode, the record lists the effective exclude patterns (built-in + source `excludes`)
 
-- [ ] **P1**: A citadel source can declare an optional `excludes` list
+- [x] **P1**: A citadel source can declare an optional `excludes` list
   - `excludes` accepts repo-relative paths and globs, validated with the same shape rules as `includes`
   - In whole-repository mode, matching files are skipped in addition to the built-in list
   - When the source is includes-driven or manifest-driven, a non-empty `excludes` produces a warning that it was ignored, and sync continues
 
-- [ ] **P1**: Maester configuration allows a manifest with zero published entries
+- [x] **P1**: Maester configuration allows a manifest with zero published entries
   - The maester walkthrough lets the user finish without adding entries, after an explicit confirmation that this publishes the whole repository
   - The resulting manifest is valid and consumable by sync, which treats it as whole-repository
   - Final output states that the whole repository is published
 
-- [ ] **P1**: Citadel init explains the fallback when the user skips `includes`
+- [x] **P1**: Citadel init explains the fallback when the user skips `includes`
   - The optional `includes` step tells the user that skipping it means: use the remote's `maester.yaml` if present, otherwise pull the whole repository
   - No new walkthrough step is added; the existing step's wording changes only
 
-- [ ] **P2**: Citadel status reports each source's resolved mode
+- [x] **P2**: Citadel status reports each source's resolved mode
   - Status output shows the mode recorded by the most recent sync for each source
   - Sources never synced show no mode rather than a guessed one
 

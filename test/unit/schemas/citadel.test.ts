@@ -25,6 +25,31 @@ describe("SourceSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts an excludes list of repo-relative paths and globs", () => {
+    const result = SourceSchema.safeParse({
+      name: "handbook",
+      url: "https://x.git",
+      excludes: ["archive/**", "**/*.drawio"],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects an empty excludes list", () => {
+    const result = SourceSchema.safeParse({ name: "handbook", url: "https://x.git", excludes: [] });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects excludes entries that escape the repository", () => {
+    for (const bad of ["/etc/passwd", "../sibling/**", "  "]) {
+      const result = SourceSchema.safeParse({
+        name: "handbook",
+        url: "https://x.git",
+        excludes: [bad],
+      });
+      expect(result.success, bad).toBe(false);
+    }
+  });
+
   it("rejects names with uppercase letters", () => {
     const result = SourceSchema.safeParse({ name: "DesignSystem", url: "https://x.git" });
     expect(result.success).toBe(false);

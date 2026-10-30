@@ -27,6 +27,22 @@ describe("finalizeMaesterManifest", () => {
     expect(config.documents).toHaveLength(2);
   });
 
+  it("writes an empty manifest that explains it publishes the whole repository", async () => {
+    const result = await finalizeMaesterManifest(repo.path, []);
+    expect(result.documentCount).toBe(0);
+    const text = await readFile(repo.resolve("maester.yaml"), "utf8");
+    expect(text).toContain("publishes the WHOLE repository");
+    expect(text).toContain("documents: []");
+    const config = await loadMaesterConfig(repo.path);
+    expect(config.documents).toEqual([]);
+  });
+
+  it("omits the whole-repository note when documents are declared", async () => {
+    await finalizeMaesterManifest(repo.path, [{ path: "README.md" }]);
+    const text = await readFile(repo.resolve("maester.yaml"), "utf8");
+    expect(text).not.toContain("WHOLE repository");
+  });
+
   it("never touches citadel.yaml", async () => {
     await finalizeMaesterManifest(repo.path, [{ path: "README.md" }]);
     let caught: unknown;

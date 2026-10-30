@@ -1,12 +1,15 @@
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import type { CitadelConfig, Source } from "../../schemas/citadel.js";
 import { resolveAuth } from "../auth/resolver.js";
 import { CACHE_SUBDIR, cachePathForSource, defaultDestinationFor } from "../config/paths.js";
 import { AuthError, MaesterError, RefNotFoundError } from "../errors.js";
 import { clearWorktree } from "../git/client.js";
+import { appendMissingGitignoreEntries, gitignoreEntryFor, isIgnored } from "../repo/gitignore.js";
+import type { SkippedCounts } from "../sources/excludes.js";
 import { type FetchWarning, type FetchedTree, fetchSource } from "../sources/fetcher.js";
+import type { FilterMode, WholeRepoReason } from "../sources/filter-mode.js";
 import {
   type StateApplyDetail,
   type StateApplyResult,
@@ -14,10 +17,30 @@ import {
   type StateWarning,
   applyState,
 } from "../state/applier.js";
-import { filterSetMatches, readProvenanceMarker } from "./provenance.js";
+import { findDanglingLinks, stageLinks } from "./link.js";
+import {
+  type MaterializationMode,
+  type ProvenanceMarker,
+  filterSetMatches,
+  readProvenanceMarker,
+} from "./provenance.js";
 import { stageDestination } from "./stage.js";
 
 export type SyncStatus = "added" | "updated" | "unchanged" | "failed";
+
+/**
+ * Emitted when a destination's materialization changes between runs and its
+ * version-control status no longer matches: copy -> link leaves previously
+ * committed files tracked; link -> copy leaves the destination gitignored.
+ */
+export type DestinationIgnoredWarning = {
+  type: "destination-ignored";
+  name: string;
+  transition: "copy-to-link" | "link-to-copy";
+  destination: string;
+};
+
+export type SyncWarning = FetchWarning | DestinationIgnoredWarning;
 
 export type SyncOutcome = {
   name: string;
@@ -25,7 +48,15 @@ export type SyncOutcome = {
   destination: string;
   ref: string | undefined;
   commitSha?: string;
-  warnings: FetchWarning[];
+  mode?: MaterializationMode;
+  filterMode?: FilterMode;
+  wholeRepoReason?: WholeRepoReason;
+  /** Link mode: number of files linked. */
+  fileCount?: number;
+  skipped?: SkippedCounts;
+  /** The `.gitignore` line this run added, if any. */
+  gitignoreEntry?: string;
+  warnings: SyncWarning[];
   stateBreakdown?: StateBreakdown;
   stateWarnings?: StateWarning[];
   stateDetails?: StateApplyDetail[];
@@ -50,7 +81,7 @@ export type ProgressEvent =
   | { type: "start"; name: string }
   | { type: "fetched"; name: string; commitSha: string }
   | { type: "staged"; name: string; status: SyncStatus }
-  | { type: "warning"; name: string; warning: FetchWarning }
+  | { type: "warning"; name: string; warning: SyncWarning }
   | { type: "failed"; name: string; error: string };
 
 const DEFAULT_CONCURRENCY = 4;
@@ -114,16 +145,14 @@ async function processEntry(
     : defaultDestinationFor(options.repoRoot, source.name, baseDir);
 
   options.onProgress?.({ type: "start", name: source.name });
+  const existingMarker = await readProvenanceMarker(destination);
 
   try {
     const auth = resolveAuth(source.auth, env);
-    const tokenForUrl = auth.type === "token" ? auth.value : undefined;
-    const cacheExists = existsSync(cacheDir);
-
     const tree: FetchedTree = await fetchSource(source, {
       cacheDir,
-      cacheExists,
-      tokenForUrl,
+      cacheExists: existsSync(cacheDir),
+      tokenForUrl: auth.type === "token" ? auth.value : undefined,
     });
 
     options.onProgress?.({ type: "fetched", name: source.name, commitSha: tree.commitSha });
@@ -131,65 +160,17 @@ async function processEntry(
       options.onProgress?.({ type: "warning", name: source.name, warning });
     }
 
-    const existingMarker = await readProvenanceMarker(destination);
-    const wasUnchanged =
-      !!existingMarker &&
-      existingMarker.commitSha === tree.commitSha &&
-      existingMarker.sourceName === source.name &&
-      filterSetMatches(existingMarker.filterSet, tree.filterSet) &&
-      existsSync(destination);
-
-    if (wasUnchanged) {
-      options.onProgress?.({ type: "staged", name: source.name, status: "unchanged" });
-      return {
-        name: source.name,
-        status: "unchanged",
-        destination,
-        ref: source.ref,
-        commitSha: tree.commitSha,
-        warnings: tree.warnings,
-      };
-    }
-
-    const stageResult = await stageDestination<StateApplyResult>({
-      cacheDir: tree.cacheDir,
-      destination,
-      marker: {
-        sourceName: tree.name,
-        sourceUrl: source.url,
-        ref: source.ref,
-        commitSha: tree.commitSha,
-        filterSet: tree.filterSet,
-        syncedAt: new Date().toISOString(),
-      },
-      beforePromote: (stagedDir) => applyState(stagedDir, tree.rules),
-    });
-    const stateResult = stageResult.beforePromoteResult;
-
-    const status: SyncStatus = existingMarker ? "updated" : "added";
-    options.onProgress?.({ type: "staged", name: source.name, status });
-    return {
-      name: source.name,
-      status,
-      destination,
-      ref: source.ref,
-      commitSha: tree.commitSha,
-      warnings: tree.warnings,
-      ...(stateResult
-        ? {
-            stateBreakdown: stateResult.breakdown,
-            stateWarnings: stateResult.warnings,
-            stateDetails: stateResult.details,
-          }
-        : {}),
-    };
+    const mode = resolveSourceMode(tree.filterMode);
+    const outcome = await materialize(source, tree, mode, destination, existingMarker, options);
+    options.onProgress?.({ type: "staged", name: source.name, status: outcome.status });
+    return outcome;
   } catch (err) {
     const message = errorMessage(err);
     options.onProgress?.({ type: "failed", name: source.name, error: message });
-    try {
-      await clearWorktree(cacheDir);
-    } catch {
-      /* ignore */
+    // A link-mode destination points into the cache; wiping it on a transient
+    // failure would leave every existing link dangling.
+    if (existingMarker?.mode !== "link") {
+      await clearWorktree(cacheDir).catch(() => undefined);
     }
     return {
       name: source.name,
@@ -200,6 +181,165 @@ async function processEntry(
       error: message,
     };
   }
+}
+
+/**
+ * Git sources are copied, except in whole-repository mode, which is link-only
+ * (architecture Gap 74): an undeclared publish surface never enters version
+ * control.
+ */
+export function resolveSourceMode(filterMode: FilterMode): MaterializationMode {
+  return filterMode === "whole-repository" ? "link" : "copy";
+}
+
+async function materialize(
+  source: Source,
+  tree: FetchedTree,
+  mode: MaterializationMode,
+  destination: string,
+  existingMarker: ProvenanceMarker | undefined,
+  options: SyncOptions,
+): Promise<SyncOutcome> {
+  const base = baseOutcome(source, tree, mode, destination);
+  const transition = await transitionWarning(source, mode, destination, existingMarker, options);
+  if (transition) base.warnings.push(transition);
+
+  const gitignoreEntry =
+    mode === "link" ? await ensureDestinationIgnored(options.repoRoot, destination) : undefined;
+  if (gitignoreEntry) base.gitignoreEntry = gitignoreEntry;
+
+  if (await isUnchanged(source, tree, mode, destination, existingMarker)) {
+    return { ...base, status: "unchanged" };
+  }
+  const status: SyncStatus = existingMarker ? "updated" : "added";
+  if (mode === "link") {
+    await stageLinksFor(tree, destination, source);
+    return { ...base, status };
+  }
+  return { ...base, status, ...(await stageCopy(source, tree, destination)) };
+}
+
+function baseOutcome(
+  source: Source,
+  tree: FetchedTree,
+  mode: MaterializationMode,
+  destination: string,
+): SyncOutcome {
+  const outcome: SyncOutcome = {
+    name: source.name,
+    status: "unchanged",
+    destination,
+    ref: source.ref,
+    commitSha: tree.commitSha,
+    mode,
+    filterMode: tree.filterMode,
+    warnings: [...tree.warnings],
+  };
+  if (tree.wholeRepoReason) outcome.wholeRepoReason = tree.wholeRepoReason;
+  if (tree.skipped) outcome.skipped = tree.skipped;
+  if (tree.files) outcome.fileCount = tree.files.length;
+  return outcome;
+}
+
+async function isUnchanged(
+  source: Source,
+  tree: FetchedTree,
+  mode: MaterializationMode,
+  destination: string,
+  marker: ProvenanceMarker | undefined,
+): Promise<boolean> {
+  if (!marker || !existsSync(destination)) return false;
+  // A legacy marker has no filterMode; that alone is never treated as drift.
+  const filterModeMatches =
+    marker.filterMode === undefined || marker.filterMode === tree.filterMode;
+  const sameShape =
+    marker.sourceName === source.name &&
+    marker.commitSha === tree.commitSha &&
+    marker.mode === mode &&
+    filterModeMatches &&
+    filterSetMatches(marker.filterSet, tree.filterSet) &&
+    filterSetMatches(marker.excludes ?? [], tree.excludes ?? []);
+  if (!sameShape) return false;
+  return mode === "copy" || (await findDanglingLinks(destination)).length === 0;
+}
+
+async function stageLinksFor(
+  tree: FetchedTree,
+  destination: string,
+  source: Source,
+): Promise<void> {
+  await stageLinks({
+    files: tree.files ?? [],
+    targetRoot: tree.cacheDir,
+    destination,
+    // The cache lives inside the repo, so relative targets survive moving it.
+    relativeTargets: true,
+    marker: markerInput(source, tree, "link"),
+  });
+}
+
+async function stageCopy(
+  source: Source,
+  tree: FetchedTree,
+  destination: string,
+): Promise<Partial<SyncOutcome>> {
+  const stageResult = await stageDestination<StateApplyResult>({
+    cacheDir: tree.cacheDir,
+    destination,
+    marker: markerInput(source, tree, "copy"),
+    beforePromote: (stagedDir) => applyState(stagedDir, tree.rules),
+  });
+  const stateResult = stageResult.beforePromoteResult;
+  if (!stateResult) return {};
+  return {
+    stateBreakdown: stateResult.breakdown,
+    stateWarnings: stateResult.warnings,
+    stateDetails: stateResult.details,
+  };
+}
+
+function markerInput(source: Source, tree: FetchedTree, mode: MaterializationMode) {
+  return {
+    sourceName: tree.name,
+    sourceUrl: source.url,
+    ref: source.ref,
+    commitSha: tree.commitSha,
+    mode,
+    filterMode: tree.filterMode,
+    filterSet: tree.filterSet,
+    ...(tree.excludes ? { excludes: tree.excludes } : {}),
+    syncedAt: new Date().toISOString(),
+  };
+}
+
+/** Append `/<destination>/` to `.gitignore` unless already covered. Returns the added line. */
+async function ensureDestinationIgnored(
+  repoRoot: string,
+  destination: string,
+): Promise<string | undefined> {
+  const rel = relative(repoRoot, destination);
+  if (await isIgnored(repoRoot, rel)) return undefined;
+  const entry = gitignoreEntryFor(rel);
+  const { added } = await appendMissingGitignoreEntries(repoRoot, [entry]);
+  return added.length > 0 ? entry : undefined;
+}
+
+async function transitionWarning(
+  source: Source,
+  mode: MaterializationMode,
+  destination: string,
+  marker: ProvenanceMarker | undefined,
+  options: SyncOptions,
+): Promise<DestinationIgnoredWarning | undefined> {
+  if (!marker || marker.mode === mode) return undefined;
+  const rel = relative(options.repoRoot, destination);
+  if (mode === "copy" && !(await isIgnored(options.repoRoot, rel))) return undefined;
+  return {
+    type: "destination-ignored",
+    name: source.name,
+    transition: mode === "link" ? "copy-to-link" : "link-to-copy",
+    destination: rel,
+  };
 }
 
 function errorMessage(err: unknown): string {

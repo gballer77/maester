@@ -1,28 +1,49 @@
 import type { Dirent } from "node:fs";
 import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { parseDocument } from "yaml";
-import { type Source, normalizeIncludeEntry } from "../../schemas/citadel.js";
+import type { Source } from "../../schemas/citadel.js";
 import { MaesterConfigSchema } from "../../schemas/maester.js";
 import { MaesterError } from "../errors.js";
-import { checkoutRef, fetchHead, setSparsePatterns, shallowSparseClone } from "../git/client.js";
+import {
+  addSparsePatterns,
+  checkoutRef,
+  fetchHead,
+  setSparsePatterns,
+  shallowSparseClone,
+} from "../git/client.js";
 import type { RuleEntry } from "../state/schema.js";
+import { BUILTIN_SPARSE_NEGATIONS, type SkippedCounts, filterWholeRepoFiles } from "./excludes.js";
+import {
+  type FilterMode,
+  MAESTER_MANIFEST_FILENAME,
+  type WholeRepoReason,
+  hasExplicitIncludes,
+  readManifestProbe,
+  resolveFilterMode,
+} from "./filter-mode.js";
 
-const MAESTER_MANIFEST_FILENAME = "maester.yaml";
+/** Sparse pattern set for whole-repository mode: everything, minus noisy dirs. */
+const WHOLE_REPO_SPARSE_PATTERNS = ["/*", ...BUILTIN_SPARSE_NEGATIONS];
 
-export type FetchWarning = {
-  type: "no-matches";
-  name: string;
-  includes: readonly string[];
-};
+export type FetchWarning =
+  | { type: "no-matches"; name: string; includes: readonly string[] }
+  | { type: "excludes-ignored"; name: string; filterMode: "includes" | "manifest" };
 
 export type FetchedTree = {
   name: string;
   cacheDir: string;
   commitSha: string;
+  filterMode: FilterMode;
   filterSet: readonly string[];
   rules: readonly RuleEntry[];
+  /** Whole-repository mode: the authoritative, filtered, sorted file list. */
+  files?: readonly string[];
+  /** Whole-repository mode: built-in excludes followed by the source's own. */
+  excludes?: readonly string[];
+  wholeRepoReason?: WholeRepoReason;
+  skipped?: SkippedCounts;
   warnings: FetchWarning[];
 };
 
@@ -37,52 +58,74 @@ type ManifestDiscovery =
   | { mode: "no-manifest"; reason: "absent" | "invalid" };
 
 export async function fetchGitSource(entry: Source, ctx: FetchContext): Promise<FetchedTree> {
-  if (entry.includes && entry.includes.length > 0) {
-    const normalized = entry.includes.map(normalizeIncludeEntry);
-    return fetchWithExplicitIncludes(entry, ctx, normalized);
+  const includesDriven = hasExplicitIncludes(entry);
+  await ensureCache(entry, ctx, !includesDriven);
+
+  const probe = includesDriven ? undefined : await readManifestProbe(ctx.cacheDir);
+  const resolution = resolveFilterMode(entry, probe);
+  const warnings: FetchWarning[] = [];
+
+  switch (resolution.mode) {
+    case "invalid-manifest":
+      throw manifestInvalidError(entry.name);
+    case "whole-repository": {
+      await setSparsePatterns(ctx.cacheDir, WHOLE_REPO_SPARSE_PATTERNS);
+      const commitSha = await checkoutRef(ctx.cacheDir, entry.ref);
+      const candidates = await listWorkingTreeFiles(ctx.cacheDir);
+      const { files, skipped } = await filterWholeRepoFiles(
+        ctx.cacheDir,
+        candidates,
+        resolution.excludes,
+      );
+      return {
+        name: entry.name,
+        cacheDir: ctx.cacheDir,
+        commitSha,
+        filterMode: "whole-repository",
+        filterSet: ["**"],
+        rules: [],
+        files,
+        excludes: resolution.excludes,
+        wholeRepoReason: resolution.reason,
+        skipped,
+        warnings,
+      };
+    }
+    default: {
+      if (entry.excludes && entry.excludes.length > 0) {
+        warnings.push({ type: "excludes-ignored", name: entry.name, filterMode: resolution.mode });
+      }
+      await setSparsePatterns(ctx.cacheDir, resolution.patterns);
+      const commitSha = await checkoutRef(ctx.cacheDir, entry.ref);
+      if (resolution.mode === "includes") {
+        const materialized = await listWorkingTreeFiles(ctx.cacheDir);
+        if (materialized.length === 0) {
+          warnings.push({ type: "no-matches", name: entry.name, includes: resolution.patterns });
+        }
+      }
+      return {
+        name: entry.name,
+        cacheDir: ctx.cacheDir,
+        commitSha,
+        filterMode: resolution.mode,
+        filterSet: resolution.patterns,
+        rules: resolution.rules,
+        warnings,
+      };
+    }
   }
-  return fetchWithRemoteManifest(entry, ctx);
 }
 
-async function fetchWithRemoteManifest(entry: Source, ctx: FetchContext): Promise<FetchedTree> {
-  if (!ctx.cacheExists) {
-    await shallowSparseClone({
-      url: entry.url,
-      destination: ctx.cacheDir,
-      ref: entry.ref,
-      ...(ctx.tokenForUrl ? { useTokenInUrl: ctx.tokenForUrl } : {}),
-    });
-    // Materialize only the manifest first so we can discover the filter set
-    // without paying the cost of the full tree.
-    await setSparsePatterns(ctx.cacheDir, [MAESTER_MANIFEST_FILENAME]);
-    await checkoutRef(ctx.cacheDir, entry.ref);
-  } else {
-    await fetchHead(ctx.cacheDir, entry.ref);
-  }
-
-  const discovery = await discoverManifestFromCache(ctx.cacheDir);
-  if (discovery.mode === "no-manifest") {
-    throw manifestError(entry.name, discovery.reason);
-  }
-
-  await setSparsePatterns(ctx.cacheDir, discovery.patterns);
-  const commitSha = await checkoutRef(ctx.cacheDir, entry.ref);
-
-  return {
-    name: entry.name,
-    cacheDir: ctx.cacheDir,
-    commitSha,
-    filterSet: discovery.patterns,
-    rules: discovery.rules,
-    warnings: [],
-  };
-}
-
-async function fetchWithExplicitIncludes(
+/**
+ * Clone (first run) or fetch + hard-reset (later runs) the source into its
+ * cache. When the manifest will be consulted, make sure `maester.yaml` is in
+ * the sparse set so discovery sees it regardless of the previous run's mode.
+ */
+async function ensureCache(
   entry: Source,
   ctx: FetchContext,
-  normalized: readonly { path: string; state?: import("../state/schema.js").State }[],
-): Promise<FetchedTree> {
+  needsManifest: boolean,
+): Promise<void> {
   if (!ctx.cacheExists) {
     await shallowSparseClone({
       url: entry.url,
@@ -90,51 +133,29 @@ async function fetchWithExplicitIncludes(
       ref: entry.ref,
       ...(ctx.tokenForUrl ? { useTokenInUrl: ctx.tokenForUrl } : {}),
     });
-  } else {
-    await fetchHead(ctx.cacheDir, entry.ref);
+    if (needsManifest) {
+      // Materialize only the manifest first so the filter set is discovered
+      // without paying for the full tree.
+      await setSparsePatterns(ctx.cacheDir, [MAESTER_MANIFEST_FILENAME]);
+      await checkoutRef(ctx.cacheDir, entry.ref);
+    }
+    return;
   }
-
-  // Explicit includes bypass remote manifest discovery — the citadel owns the
-  // filter set directly. Validated as non-empty by the schema.
-  const patterns = normalized.map((entry) => entry.path);
-  await setSparsePatterns(ctx.cacheDir, patterns);
-  const commitSha = await checkoutRef(ctx.cacheDir, entry.ref);
-
-  const matchedFileCount = await countMaterializedFiles(ctx.cacheDir);
-  const warnings: FetchWarning[] = [];
-  if (matchedFileCount === 0) {
-    warnings.push({ type: "no-matches", name: entry.name, includes: patterns });
-  }
-
-  const rules: RuleEntry[] = normalized.map((entry) =>
-    entry.state === undefined
-      ? { pattern: entry.path }
-      : { pattern: entry.path, state: entry.state },
-  );
-
-  return {
-    name: entry.name,
-    cacheDir: ctx.cacheDir,
-    commitSha,
-    filterSet: patterns,
-    rules,
-    warnings,
-  };
+  await fetchHead(ctx.cacheDir, entry.ref);
+  if (needsManifest) await addSparsePatterns(ctx.cacheDir, [MAESTER_MANIFEST_FILENAME]);
 }
 
-function manifestError(name: string, reason: "absent" | "invalid"): MaesterError {
-  if (reason === "absent") {
-    return new MaesterError(
-      "MAESTER_MANIFEST_MISSING",
-      `source '${name}' does not publish a maester.yaml manifest at the configured ref. Sync will not fall back to the full tree — either add a maester.yaml to the source repo or declare an \`includes\` list on this source.`,
-    );
-  }
+function manifestInvalidError(name: string): MaesterError {
   return new MaesterError(
     "MAESTER_MANIFEST_INVALID",
-    `source '${name}' publishes a maester.yaml that failed schema validation. Sync will not fall back to the full tree — fix the manifest in the source repo or declare an \`includes\` list on this source.`,
+    `source '${name}' publishes a maester.yaml that failed schema validation. Sync never treats a broken manifest as "publish everything" — fix the manifest in the source repo or declare an \`includes\` list on this source.`,
   );
 }
 
+/**
+ * Legacy manifest discovery, still used by the status probe. Prefer
+ * `readManifestProbe()` + `resolveFilterMode()` for new code.
+ */
 export async function discoverManifestFromCache(cacheDir: string): Promise<ManifestDiscovery> {
   const path = resolve(cacheDir, MAESTER_MANIFEST_FILENAME);
   if (!existsSync(path)) return { mode: "no-manifest", reason: "absent" };
@@ -156,28 +177,27 @@ export async function discoverManifestFromCache(cacheDir: string): Promise<Manif
   }
 }
 
-async function countMaterializedFiles(cacheDir: string): Promise<number> {
-  let count = 0;
+/**
+ * Root-relative paths of every regular file in a working tree, skipping
+ * `.git`. Symbolic links committed to the source are skipped: linking to them
+ * could point the citadel outside the fetched tree.
+ */
+export async function listWorkingTreeFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
   async function walk(dir: string): Promise<void> {
     let entries: Dirent[];
     try {
-      entries = (await readdir(dir, {
-        withFileTypes: true,
-        encoding: "utf8",
-      })) as Dirent[];
+      entries = await readdir(dir, { withFileTypes: true });
     } catch {
       return;
     }
     for (const entry of entries) {
       if (entry.name === ".git") continue;
       const fullPath = resolve(dir, entry.name);
-      if (entry.isDirectory()) {
-        await walk(fullPath);
-      } else if (entry.isFile()) {
-        count++;
-      }
+      if (entry.isDirectory()) await walk(fullPath);
+      else if (entry.isFile()) files.push(relative(root, fullPath).split("\\").join("/"));
     }
   }
-  await walk(cacheDir);
-  return count;
+  await walk(root);
+  return files.sort();
 }
