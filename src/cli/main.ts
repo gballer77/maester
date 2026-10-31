@@ -1,6 +1,7 @@
 import { Command, type OptionValues } from "commander";
 import { detectRoles } from "../core/config/paths.js";
 import { MaesterError } from "../core/errors.js";
+import { PACKAGE_VERSION } from "../package-meta.js";
 import { bannerForContext } from "../ui/components/banner.js";
 import { PromptCancelledError } from "../ui/prompts.js";
 import { createTheming } from "../ui/theme/index.js";
@@ -54,7 +55,9 @@ function maybeRenderHelpVersionBanner(argv: readonly string[]): void {
   const wantsVersion = tail.includes("--version") || tail.includes("-V");
   if (!wantsHelp && !wantsVersion) return;
   const theming = createTheming();
-  const subtitle = wantsVersion ? "v0.4.1 · living specs" : "living specs · v0.4.1";
+  const subtitle = wantsVersion
+    ? `v${PACKAGE_VERSION} · living specs`
+    : `living specs · v${PACKAGE_VERSION}`;
   const banner = bannerForContext(theming, readColumns(), subtitle);
   if (banner.length > 0) {
     process.stdout.write(`${banner}\n\n`);
@@ -75,7 +78,7 @@ function buildProgram(): Command {
   program
     .name("maester")
     .description("Aggregate documentation from many sources into one citadel.")
-    .version("0.4.1", "-V, --version", "Print the maester version.")
+    .version(PACKAGE_VERSION, "-V, --version", "Print the maester version.")
     .option("--verbose", "Show verbose output")
     .option("--quiet", "Suppress all output except errors")
     .option("--json", "Emit machine-readable JSON output (one object per line)")
@@ -133,7 +136,11 @@ async function runNoArgs(ctx: CliContext): Promise<number> {
   const roles = detectRoles(ctx.repoRoot.path);
   const showWelcome = !roles.hasCitadel && !roles.hasMaester && !ctx.flags.noWelcome;
   if (showWelcome) {
-    const banner = bannerForContext(ctx.theming, readColumns(), "living specs · v0.4.1");
+    const banner = bannerForContext(
+      ctx.theming,
+      readColumns(),
+      `living specs · v${PACKAGE_VERSION}`,
+    );
     if (banner.length > 0) {
       process.stdout.write(`${banner}\n\n`);
     }

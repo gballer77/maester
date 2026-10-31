@@ -2,6 +2,7 @@ import { execFile as execFileCb } from "node:child_process";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import pkg from "../../package.json" with { type: "json" };
 
 const execFile = promisify(execFileCb);
 const REPO_ROOT = resolve(__dirname, "..", "..");
@@ -29,10 +30,10 @@ describe("CLI smoke", () => {
     expect(stdout).toContain("init");
   });
 
-  it("prints version on --version", async () => {
+  it("prints the package.json version on --version", async () => {
     const { stdout, code } = await run(["--version"]);
     expect(code).toBe(0);
-    expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+/);
+    expect(stdout.trim()).toBe(pkg.version);
   });
 
   it("prints help suggestion when invoked with no args in a non-TTY", async () => {

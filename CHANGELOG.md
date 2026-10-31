@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-30
+
+### Fixed
+- **`maester --version` and the banner report the real package version.** They were hardcoded and showed `0.4.1` in 0.5.0.
+
 ### Added
 - **AI-aided maester definition (Publisher skill).** `maester skill install --skill publisher` installs instructions that let your coding agent propose `maester.yaml` entries (documents, description, category, tags, state). It works in Claude Code (`.claude/skills/maester-publisher/`), Codex (`.agents/skills/maester-publisher/`), Cursor (`.cursor/rules/maester-publisher.mdc`) and `AGENTS.md` (its own managed region, next to the Grand Maester's). It needs no citadel. The agent grounds itself, shows the full proposal, and writes only what the user approves. maester never calls a model. `maester publish` offers the skill at the end of its walkthrough.
 - **`maester publish apply [--from <file>|-] [--create] [--dry-run]`** applies a JSON change set (`add` / `update` / `remove`) to `maester.yaml` atomically. It keeps comments and untouched entries. Guards: `acknowledgeNarrowing` when a whole-repository publish would narrow, `allowSensitive` for paths matching sensitive files, and no removing the last entry. A refused change set exits `2` with `{field, path, message}`.
