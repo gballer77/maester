@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { loadCitadelConfig } from "../../core/config/loader.js";
-import { invokeOperation } from "../../core/connectors/dispatch.js";
+import { invokeOperation, listConnectorTools } from "../../core/connectors/dispatch.js";
 import { hasConnectorType, listConnectorTypes } from "../../core/connectors/registry.js";
 import { toolName } from "../../core/connectors/tool-name.js";
 import { ConfigError, MaesterError } from "../../core/errors.js";
@@ -10,8 +10,17 @@ import {
   listConnectorsFromCitadel,
   removeConnectorFromCitadel,
 } from "../../core/init/connector-writer.js";
-import { refreshMcpRegistrations } from "../../core/mcp/registrations/index.js";
-import { type Connector, ENV_VAR_RE, SLUG_RE } from "../../schemas/citadel.js";
+import {
+  findLinkedDestinations,
+  linkedDocumentToolDescriptors,
+} from "../../core/mcp/linked-docs.js";
+import { checkMcpServers, describeWarning, formatFailure } from "../../core/mcp/proxy/index.js";
+import {
+  type McpRegistrationPlan,
+  planMcpRegistrations,
+  refreshMcpRegistrations,
+} from "../../core/mcp/registrations/index.js";
+import { type Connector, ENV_VAR_RE, SLUG_RE, isDirectMcpServer } from "../../schemas/citadel.js";
 import { PromptCancelledError } from "../../ui/prompts.js";
 import type { CliContext } from "../context.js";
 
@@ -66,8 +75,18 @@ export function registerConnector(program: Command, getContext: () => CliContext
     .description(
       "Re-validate citadel.yaml and refresh per-host MCP registrations. Use this after editing citadel.yaml by hand.",
     )
-    .action(async () => {
-      process.exitCode = await runRefresh(getContext());
+    .option("--dry-run", "Print what each host's MCP entry would contain; write nothing.")
+    .action(async (options: { dryRun?: boolean }) => {
+      const ctx = getContext();
+      process.exitCode = options.dryRun ? await runRefreshDryRun(ctx) : await runRefresh(ctx);
+    });
+
+  group
+    .command("tools")
+    .description("Print the tool list `maester mcp` would expose, without starting an MCP session.")
+    .option("--servers", "Also start proxied MCP servers to list their tools.")
+    .action(async (options: { servers?: boolean }) => {
+      process.exitCode = await runTools(getContext(), options.servers === true);
     });
 
   group
@@ -289,6 +308,144 @@ async function runRefresh(ctx: CliContext): Promise<number> {
   const outcomes = await refreshMcpRegistrations(ctx.repoRoot.path);
   reportRefresh(ctx, outcomes);
   return EXIT_OK;
+}
+
+async function runRefreshDryRun(ctx: CliContext): Promise<number> {
+  try {
+    await loadCitadelConfig(ctx.repoRoot.path);
+  } catch (err) {
+    return handleCitadelLoadError(ctx, err);
+  }
+  const { inputs, hosts } = await planMcpRegistrations(ctx.repoRoot.path);
+  if (ctx.flags.json) {
+    for (const h of hosts) {
+      const contributors = Object.fromEntries(
+        h.forwardedEnvVars.map((n) => [n, inputs.contributors[n] ?? []]),
+      );
+      process.stdout.write(`${JSON.stringify({ ...h, contributors })}\n`);
+    }
+    return hosts.some((h) => h.error !== undefined) ? EXIT_INVOCATION_ERROR : EXIT_OK;
+  }
+  for (const entry of inputs.invalid) {
+    process.stdout.write(
+      `! connector '${entry.connector}' declares invalid env-var name '${entry.envVar}' — not forwarded\n`,
+    );
+  }
+  if (hosts.length === 0) {
+    process.stdout.write(
+      "No MCP-capable Grand Maester targets installed — a refresh would write nothing.\n",
+    );
+    return EXIT_OK;
+  }
+  for (const h of hosts) process.stdout.write(formatPlan(h, inputs.managed, inputs.contributors));
+  process.stdout.write("Dry run — no files written.\n");
+  return hosts.some((h) => h.error !== undefined) ? EXIT_INVOCATION_ERROR : EXIT_OK;
+}
+
+function formatPlan(
+  h: McpRegistrationPlan,
+  declared: readonly string[],
+  contributors: Readonly<Record<string, readonly string[]>>,
+): string {
+  const lines = [`${h.host} → ${h.filePath}`];
+  if (h.error !== undefined) {
+    lines.push(`  ✗ cannot render: ${h.error}`);
+    return `${lines.join("\n")}\n\n`;
+  }
+  lines.push(`  ${h.wouldChange ? "would be rewritten" : "up to date"}`);
+  if (h.host === "cursor") {
+    lines.push("  env: no env forwarding — inherits the shell that launches Cursor");
+    for (const name of declared) {
+      lines.push(`    needs ${name}  (${(contributors[name] ?? []).join(", ")})`);
+    }
+  } else if (h.forwardedEnvVars.length === 0) {
+    lines.push("  env forwarded: (none)");
+  } else {
+    lines.push("  env forwarded:");
+    for (const name of h.forwardedEnvVars) {
+      lines.push(`    ${name}  (${(contributors[name] ?? []).join(", ")})`);
+    }
+  }
+  if (h.userEnvVars.length > 0) {
+    lines.push(`  env added by hand (kept): ${h.userEnvVars.join(", ")}`);
+  }
+  if (h.directWritten.length > 0) lines.push(`  direct servers: ${h.directWritten.join(", ")}`);
+  if (h.directRemoved.length > 0) {
+    lines.push(`  direct servers removed: ${h.directRemoved.join(", ")}`);
+  }
+  for (const skip of h.skipped) lines.push(`  ! ${skip.server} not registered: ${skip.reason}`);
+  return `${lines.join("\n")}\n\n`;
+}
+
+type ToolListing = { name: string; description?: string; inputSchema: Record<string, unknown> };
+
+async function runTools(ctx: CliContext, startServers: boolean): Promise<number> {
+  let config: Awaited<ReturnType<typeof loadCitadelConfig>>;
+  try {
+    config = await loadCitadelConfig(ctx.repoRoot.path);
+  } catch (err) {
+    return handleCitadelLoadError(ctx, err);
+  }
+  const tools: ToolListing[] = [...listConnectorTools(config)];
+  if ((await findLinkedDestinations(config, ctx.repoRoot.path)).length > 0) {
+    tools.push(...linkedDocumentToolDescriptors());
+  }
+  const servers = config.mcpServers ?? [];
+  const proxied = servers.filter((s) => !isDirectMcpServer(s));
+  const notes: string[] = [];
+  let failed = 0;
+  if (startServers && proxied.length > 0) {
+    const report = await checkMcpServers(config, process.env);
+    for (const s of report.servers) {
+      if ("direct" in s) continue;
+      if (!s.ok) {
+        failed++;
+        notes.push(`✗ ${s.server}: ${formatFailure(s.failure)}`);
+        continue;
+      }
+      for (const t of s.tools) {
+        tools.push({
+          name: t.name,
+          ...(t.description !== undefined ? { description: t.description } : {}),
+          inputSchema: t.inputSchema as Record<string, unknown>,
+        });
+      }
+      for (const w of s.warnings) notes.push(`! ${s.server}: ${describeWarning(w)}`);
+    }
+  } else {
+    for (const s of proxied) {
+      notes.push(`– ${s.name}: proxied — pass --servers to start it and list its tools`);
+    }
+  }
+  for (const s of servers.filter(isDirectMcpServer)) {
+    notes.push(`– ${s.name}: host-managed (register: direct) — its tools come from the host`);
+  }
+
+  if (ctx.flags.json) {
+    process.stdout.write(`${JSON.stringify({ tools })}\n`);
+  } else {
+    for (const t of tools) process.stdout.write(formatTool(t));
+    for (const note of notes) process.stdout.write(`${note}\n`);
+    process.stdout.write(
+      `${tools.length} tool${tools.length === 1 ? "" : "s"} (* marks a required argument)\n`,
+    );
+  }
+  return failed > 0 ? EXIT_FALLBACK_FAILURE : EXIT_OK;
+}
+
+function formatTool(tool: ToolListing): string {
+  const props = tool.inputSchema.properties;
+  const required = new Set(
+    Array.isArray(tool.inputSchema.required) ? (tool.inputSchema.required as string[]) : [],
+  );
+  const args =
+    typeof props === "object" && props !== null
+      ? Object.keys(props).map((k) => (required.has(k) ? `${k}*` : k))
+      : [];
+  const lines = [tool.name];
+  if (tool.description) lines.push(`  ${tool.description.split("\n")[0]}`);
+  lines.push(`  args: ${args.length > 0 ? args.join(", ") : "(none)"}`);
+  return `${lines.join("\n")}\n`;
 }
 
 async function runExec(

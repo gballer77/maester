@@ -124,7 +124,7 @@ spec-version: v1
   - A connector whose `auth.envVar` fails the framework's regex validation triggers a stderr warning naming the connector and the offending value; the rest of the set is still written. The warning is one short line per offender, not a stack trace.
   - A host config file that exists but cannot be parsed (corrupt TOML/JSON) causes the writer for that host to return `action: "failed"` with the parser's message; other hosts' refresh continues independently.
 
-- [ ] **P2**: A diagnostic surface lists the connector-derived env vars the writer would emit per host
+- [x] **P2**: A diagnostic surface lists the connector-derived env vars the writer would emit per host
   - A read-only verb (or extension to an existing diagnostic command, e.g. `maester connector tools` per the framework PRD's deferred idea) prints, for each installed MCP-capable host, the connector-derived env-var names the writer would currently emit — so the user can verify the seeded set before invoking a refresh.
   - The output also names which connector(s) contributed each env var (useful when several connectors share a token-env-var name).
   - Read-only — does not write anything to disk.

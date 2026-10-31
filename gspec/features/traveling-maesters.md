@@ -213,7 +213,7 @@ spec-version: v1
   - The management commands warn — do not reject — when a connector name shadows a source name, since the two live in separate namespaces but reading the config can confuse a future maintainer
   - The warning is informational; the entry is still added
 
-- [ ] **P2**: A diagnostic verb reports the resolved tool surface without starting an MCP session
+- [x] **P2**: A diagnostic verb reports the resolved tool surface without starting an MCP session
   - A verb (e.g. `maester connector tools`) prints the names, descriptions, and argument shapes of every tool the MCP server *would* expose for the current citadel config
   - Useful for spec authors verifying tool naming and descriptions before committing a citadel-config change
   - Output is the same shape an MCP `tools/list` response would carry; humans can read it but it is primarily a debugging surface

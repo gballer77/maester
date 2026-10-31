@@ -189,6 +189,7 @@ mcpServers:
 - **Secrets:** only env-var names appear in any file maester writes. Local servers receive only the names you list, plus `PATH`/`HOME`-style basics.
 - **Manage them:** `maester mcp-server add`, `remove`, `list`, and `check`. `check` starts each proxied server and reports its tools, or why it failed. `maester init` also offers this step.
 - **Names** share one namespace with connectors; `maester` and `citadel` are reserved.
+- **Diagnose:** `maester connector tools` lists the tools `maester mcp` would expose, without starting a session (`--servers` also starts proxied servers to list theirs). `maester connector refresh --dry-run` shows, per agent host, which env-var names are forwarded and who needs each, without writing anything.
 
 ## Prerequisites
 

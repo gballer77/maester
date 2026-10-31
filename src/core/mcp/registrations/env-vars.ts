@@ -16,6 +16,11 @@ export type ConnectorEnvVars = {
 
 const EMPTY: ConnectorEnvVars = { managed: [], invalid: [] };
 
+export type ForwardedEnvVars = ConnectorEnvVars & {
+  /** Who needs each forwarded name: `connector:<name>` / `mcp-server:<name>`. */
+  contributors: Readonly<Record<string, readonly string[]>>;
+};
+
 /**
  * Collect the set of env-var names that token-auth connectors expect at MCP-tool
  * invocation time. The result feeds each host's native pass-through mechanism
@@ -52,16 +57,31 @@ export function collectConnectorEnvVars(
  */
 export function collectForwardedEnvVars(
   config: Pick<CitadelConfig, "connectors" | "mcpServers">,
-): ConnectorEnvVars {
+): ForwardedEnvVars {
   const connectorVars = collectConnectorEnvVars(config.connectors);
-  const names = new Set(connectorVars.managed);
+  const contributors = new Map<string, string[]>();
+  const add = (name: string, who: string) => {
+    const list = contributors.get(name) ?? [];
+    if (!list.includes(who)) list.push(who);
+    contributors.set(name, list);
+  };
+  for (const c of config.connectors ?? []) {
+    if (c.auth?.type === "token" && ENV_VAR_RE.test(c.auth.envVar)) {
+      add(c.auth.envVar, `connector:${c.name}`);
+    }
+  }
   for (const server of config.mcpServers ?? []) {
     if (isDirectMcpServer(server)) continue;
     for (const name of mcpServerEnvVarNames(server)) {
-      if (ENV_VAR_RE.test(name)) names.add(name);
+      if (ENV_VAR_RE.test(name)) add(name, `mcp-server:${server.name}`);
     }
   }
-  return { managed: Array.from(names).sort(), invalid: connectorVars.invalid };
+  const managed = Array.from(contributors.keys()).sort();
+  return {
+    managed,
+    invalid: connectorVars.invalid,
+    contributors: Object.fromEntries(managed.map((n) => [n, contributors.get(n) ?? []])),
+  };
 }
 
 /** Every env-var name one MCP server reads at startup. */
@@ -91,7 +111,7 @@ export async function loadConnectorEnvVarsBestEffort(
   }
 }
 
-export type McpRegistrationInputs = ConnectorEnvVars & {
+export type McpRegistrationInputs = ForwardedEnvVars & {
   /** `register: direct` servers, written as their own host entries (§6.17). */
   directServers: readonly McpServer[];
   loadError?: string;
@@ -109,7 +129,7 @@ export async function loadMcpRegistrationInputs(repoRoot: string): Promise<McpRe
     const code = (err as NodeJS.ErrnoException).code;
     const message = err instanceof Error ? err.message : String(err);
     if (code === "ENOENT" || /No citadel\.yaml/.test(message))
-      return { ...EMPTY, directServers: [] };
-    return { ...EMPTY, directServers: [], loadError: message };
+      return { ...EMPTY, contributors: {}, directServers: [] };
+    return { ...EMPTY, contributors: {}, directServers: [], loadError: message };
   }
 }
