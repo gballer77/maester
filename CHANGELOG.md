@@ -84,9 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - `ResolvedAuth` (returned by `src/core/auth/resolver.ts`) now carries the env-var name in its `token` variant: `{ type: "token"; value: string; envVar: string }`. Lets downstream consumers — including the GitLab connector's 401/403 path — surface the env-var name in error messages without re-walking the original `AuthRef`. The `delegated` variant is unchanged. Backwards-compatible for anything that only reads `type` or `value`.
-
-### Dependencies
-- Added `@modelcontextprotocol/sdk`, `zod-to-json-schema`, `@iarna/toml` as direct runtime dependencies (per architecture Gaps 34, 38, 39).
+- **Dependencies:** added `@modelcontextprotocol/sdk`, `zod-to-json-schema`, `@iarna/toml` as direct runtime dependencies (per architecture Gaps 34, 38, 39).
 
 ## [0.3.0] - 2026-05-14
 
