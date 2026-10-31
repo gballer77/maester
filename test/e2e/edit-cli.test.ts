@@ -1,4 +1,5 @@
 import { execFile as execFileCb } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -40,6 +41,20 @@ describe("CLI: config-editing verbs", () => {
     expect(list.code).toBe(0);
     expect(list.stdout).toMatch(/docs .*https:\/\/example.com\/docs.git .*default branch/);
     expect(list.stdout).toMatch(/1 source in \/.*\/citadel\.yaml/);
+  }, 30_000);
+
+  it("list --json prints the declared sources as one object", async () => {
+    await repo.writeFile(
+      "citadel.yaml",
+      "schemaVersion: 1\nbaseDir: context\nsources:\n  - name: docs\n    url: https://example.com/docs.git\n    tags: [api]\n",
+    );
+    const list = await runCli(["--json", "list"], repo.path);
+    expect(list.code).toBe(0);
+    expect(JSON.parse(list.stdout)).toEqual({
+      filePath: realpathSync(repo.resolve("citadel.yaml")),
+      baseDir: "context",
+      sources: [{ name: "docs", url: "https://example.com/docs.git", tags: ["api"] }],
+    });
   }, 30_000);
 
   it("`maester publish` keeps its walkthrough and points to the edit verbs when configured", async () => {

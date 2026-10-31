@@ -112,6 +112,16 @@ describe("applyChangeSet", () => {
     expect(await fs.readFile(file(), "utf8")).toContain("config/**");
   });
 
+  it("names the sensitive file a glob would publish, not the glob", async () => {
+    await fs.mkdir(path.join(repoRoot, "secrets"), { recursive: true });
+    await fs.writeFile(path.join(repoRoot, "secrets/key.txt"), "x");
+    const err = (await apply({ add: [{ path: "secrets/*" }] }).catch((e: unknown) => e)) as Error;
+    expect(err.message).toContain("would publish secrets/key.txt (secrets directory)");
+    // with nothing on disk, the sensitive pattern itself is named
+    const literal = (await apply({ add: [{ path: ".env" }] }).catch((e: unknown) => e)) as Error;
+    expect(literal.message).toContain("would publish .env (environment file)");
+  });
+
   it("dry run (no commit) leaves the file untouched", async () => {
     const before = await fs.readFile(file(), "utf8");
     const result = await apply({ add: [{ path: "CHANGELOG.md" }] }, { commit: false });

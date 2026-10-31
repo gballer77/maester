@@ -191,6 +191,12 @@ export async function runSourceList(ctx: CliContext): Promise<number> {
   return guarded(ctx, "citadel", "", async (handle) => {
     const { config } = handle;
     const baseDir = config.baseDir ?? DEFAULT_BASE_DIR;
+    if (ctx.flags.json) {
+      process.stdout.write(
+        `${JSON.stringify({ filePath: handle.filePath, baseDir, sources: config.sources })}\n`,
+      );
+      return EXIT_OK;
+    }
     const table = renderTable(ctx.theming, {
       columns: [
         { header: "Name", key: "name" },

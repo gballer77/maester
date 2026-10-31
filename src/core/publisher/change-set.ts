@@ -185,13 +185,15 @@ function indexOfPath(handle: EditHandle<"maester">, path: string): number {
   return seq.items.findIndex((item) => isMap(item) && item.get("path") === path);
 }
 
-/** A literal sensitive path, or a glob that resolves to one in the working tree. */
+/**
+ * A file in the working tree the pattern would publish that looks sensitive,
+ * else the pattern itself when it names a sensitive path (e.g. a `.env` that
+ * does not exist yet). Real files come first so the error names one.
+ */
 async function findSensitive(
   repoRoot: string,
   pattern: string,
 ): Promise<{ file: string; reason: string } | undefined> {
-  const literal = matchSensitive(pattern);
-  if (literal) return { file: pattern, reason: literal };
   const files = await globby(pattern, {
     cwd: repoRoot,
     // Same options as manifest resolution at sync time, so only files that
@@ -206,7 +208,8 @@ async function findSensitive(
     const reason = matchSensitive(file);
     if (reason) return { file, reason };
   }
-  return undefined;
+  const literal = matchSensitive(pattern);
+  return literal ? { file: pattern, reason: literal } : undefined;
 }
 
 function fromZod(error: ZodError): ChangeSetError {

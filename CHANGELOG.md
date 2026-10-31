@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-30
+
+### Fixed
+- **`maester list --json` prints the declared sources** as one object (`{ filePath, baseDir, sources }`). It previously ignored `--json` and printed the table.
+- **A refused sensitive glob names the file it would publish** (e.g. `secrets/key.txt`) instead of repeating the glob.
+
 ## [0.6.0] - 2026-10-30
 
 ### Fixed
