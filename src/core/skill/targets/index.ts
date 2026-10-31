@@ -1,8 +1,9 @@
-import type { SkillTarget, SkillTargetId } from "../types.js";
+import type { SkillKind, SkillTarget, SkillTargetId } from "../types.js";
 import { claudeCodeTarget } from "./claude-code.js";
 import { codexTarget } from "./codex.js";
 import { cursorTarget } from "./cursor.js";
 import { genericTarget } from "./generic.js";
+import { PUBLISHER_TARGETS } from "./publisher.js";
 
 const REGISTRY: readonly SkillTarget[] = [
   claudeCodeTarget,
@@ -11,15 +12,25 @@ const REGISTRY: readonly SkillTarget[] = [
   genericTarget,
 ];
 
-export function listSkillTargets(): readonly SkillTarget[] {
-  return REGISTRY;
+const REGISTRIES: Record<SkillKind, readonly SkillTarget[]> = {
+  "grand-maester": REGISTRY,
+  publisher: PUBLISHER_TARGETS,
+};
+
+/**
+ * Targets for one skill kind. Defaults to the Grand Maester, so callers that
+ * predate skill kinds — notably the MCP registration refresh — are unchanged.
+ */
+export function listSkillTargets(kind: SkillKind = "grand-maester"): readonly SkillTarget[] {
+  return REGISTRIES[kind];
 }
 
-export function getTarget(id: SkillTargetId): SkillTarget {
-  const found = REGISTRY.find((t) => t.id === id);
+export function getTarget(id: SkillTargetId, kind: SkillKind = "grand-maester"): SkillTarget {
+  const registry = REGISTRIES[kind];
+  const found = registry.find((t) => t.id === id);
   if (!found) {
     throw new Error(
-      `Unknown skill target '${id}'. Supported: ${REGISTRY.map((t) => t.id).join(", ")}`,
+      `Unknown skill target '${id}'. Supported: ${registry.map((t) => t.id).join(", ")}`,
     );
   }
   return found;

@@ -729,7 +729,7 @@ See §6 → CLI Command Surface.
 | `maester publish apply [--create] [--dry-run] [--from <file>\|-]` | Applies a whole change set (`{ add, update, remove, acknowledgeNarrowing?, allowSensitive? }` JSON) in one validated, atomic edit. `--create` makes `maester.yaml` when absent. `--dry-run` writes nothing. Never prompts. `--json` → `{ ok, created, added, updated, removed, documents }` or `{ ok: false, error: { field, path, message } }`. Exit `0`, or `2` on invalid input / refused edit / missing file without `--create`. §6.19. |
 | `maester publish update --path <p> [--description …] [--category …] [--tags a,b] [--state canon\|draft] [--unset <field>]…` | Non-interactive in-place update of one entry (§6.19). Same exit codes as `apply`. |
 | `maester publish inventory [--all] [--limit n]` | Read-only. Lists candidate documents with their inline metadata, the entry covering each, the vocabulary in use, a directory rollup and likely-sensitive files. Never prints file contents. `--json` → one `InventoryReport`. §6.19. |
-| `maester publish preview [--from <file>\|-]` | P2, read-only. The files each entry, current or proposed, would publish, with effective state / category / tags; flags `empty-entry` and `multi-match`. §6.19. |
+| `maester publish preview [--from <file>\|-]` | P2, read-only. The files each entry, current or proposed, would publish, with effective state / category / tags. Flags `empty-entry` and `redundant` entries and multi-matched files. `--json` → one object. §6.19. |
 | `maester sync [names...]` | Run sync. Optional positional names scope the run to a subset. |
 | `maester sync --json` | Sync, emitting one JSON object per line; prompt + spinner layers disabled. |
 | `maester status [names...]` | Read-only freshness check. Optional positional names scope the run to a subset. Exit codes: `0` (all up-to-date), `1` (≥ 1 behind, 0 failed), `2` (≥ 1 failed, or config/invocation error). |
@@ -1225,11 +1225,11 @@ The v1 registry contains four targets:
 | Target id | Label | Artifact path(s) |
 |---|---|---|
 | `claude-code` | Claude Code | `.claude/skills/grand-maester/SKILL.md` + a managed `maester` key in `.claude/settings.json` |
-| `codex` | Codex CLI | `AGENTS.md` at the repo root (managed region) |
+| `codex` | Codex CLI | `.agents/skills/grand-maester/SKILL.md` |
 | `cursor` | Cursor | `.cursor/rules/grand-maester.mdc` |
 | `agents-md` | Generic `AGENTS.md` | `AGENTS.md` at the repo root (managed region) |
 
-Codex CLI and Generic `AGENTS.md` are exposed as **separate target identifiers** so each appears in the picker, but both delegate their write to a single shared writer (`src/core/skill/templates/shells/agents-md.ts`). The installer deduplicates by output artifact path before invoking writers — selecting both targets in one run produces exactly one `AGENTS.md` and exactly one write. The install outcome still lists both target ids so the user understands which agents are now covered. See Gap 27.
+Codex CLI writes its own `.agents/skills/grand-maester/SKILL.md` (the `codex` writer); Generic `AGENTS.md` writes the managed region in `AGENTS.md` (`src/core/skill/templates/shells/agents-md.ts`). The installer still groups targets by `writerKey` before invoking writers, so ids that share a writer produce exactly one write while the outcome lists every id. See Gap 27.
 
 #### Managed-region conventions
 
@@ -2254,7 +2254,8 @@ sequenceDiagram
 | Target | Publisher artifact |
 |---|---|
 | `claude-code` | `.claude/skills/maester-publisher/SKILL.md`. Frontmatter `description` triggers on publishing, maester.yaml and "what should this repo share" requests. **No hooks.** |
-| `codex` / `agents-md` | A second managed region in `AGENTS.md`, `<!-- maester:publisher:begin v=<SKILL_VERSION> -->` … `<!-- maester:publisher:end -->`, independent of the Grand Maester region. |
+| `codex` | `.agents/skills/maester-publisher/SKILL.md` (same SKILL.md shape as Claude Code). |
+| `agents-md` | A second managed region in `AGENTS.md`, `<!-- maester:publisher:begin v=<SKILL_VERSION> -->` … `<!-- maester:publisher:end -->`, independent of the Grand Maester region. |
 | `cursor` | `.cursor/rules/maester-publisher.mdc` with `alwaysApply: false` and a trigger description. |
 
 - **`managed-region.ts`** takes the marker name (`skill` or `publisher`) as a parameter. Upgrading one region never touches the other.
@@ -2302,6 +2303,8 @@ sequenceDiagram
   - In a git work tree: `git ls-files --cached --others --exclude-standard -z`, which honours `.gitignore` and skips untracked noise.
   - Otherwise: the same filesystem walk as path sources.
   - Then `filterWholeRepoFiles()` (§6.13) applies the built-in excludes, binary sniffing and the 1 MiB cap.
+  - When the repository is also a citadel, its source destinations are excluded: they hold other repositories' content.
+  - Sensitive files are never candidates. They appear only in `sensitive`, which comes from a separate filesystem walk that **includes gitignored files**, because a local `path:` source reads the filesystem, not git.
 - **Kinds:**
 
   | Kind | Files |
@@ -2346,8 +2349,13 @@ sequenceDiagram
 
 - **Command:** `maester publish preview [--from <file>|-]`.
 - **Input:** the current manifest, or the result of applying a change set in memory.
-- **Resolution:** files are resolved with the same manifest-driven matcher `local-source.ts` uses, extracted as `resolveManifestFiles(root, documents)`. Each file's effective fields come from a pure `resolveFileMetadata(file, rules)` extracted from `core/state/applier.ts`, so the preview matches sync exactly.
-- **Output per entry:** the files it matches, each with effective `state` / `category` / `tags` and their source of truth (`inline` / `rule` / `unset`). Entries that match nothing are flagged `empty-entry`; files matched by more than one entry are flagged `multi-match`.
+- **Resolution:** files are resolved with the same manifest-driven matcher `local-source.ts` uses, extracted as `resolveManifestFiles(root, patterns)`. Each file's effective fields come from a pure `resolveFileMetadata(file, rules)` extracted from `core/state/applier.ts`, so the preview matches sync exactly.
+- **Output per entry:** the files it matches, each with effective `state` / `category` / `tags` and their source of truth (`inline` / `rule` / `unset`; `untagged` for formats inline metadata is never written into). Entry flags:
+  - `empty-entry`: matches no file;
+  - `redundant`: every file it matches is already matched by an earlier entry, so it publishes nothing extra (removing it can still change those files' metadata).
+
+  Files matched by more than one entry carry `multiMatch` with every matching entry. Metadata warnings (`disagreement`, bad inline values) are reported exactly as sync reports them.
+- **Parity:** the source's own `maester.yaml` is a sync artifact, not a published document, so preview omits it, as the metadata applier does. An e2e test checks that preview predicts exactly the files and fields a copy-mode `path:` sync writes.
 - **Whole-repository manifest:** the preview shows per-directory counts only.
 - **Writes nothing.** `--json` prints one object.
 

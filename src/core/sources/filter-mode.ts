@@ -85,7 +85,7 @@ export async function readManifestProbe(dir: string): Promise<ManifestProbe> {
 }
 
 /** A citadel `includes` entry or a manifest document, as an inline-metadata rule. */
-function toRuleEntry(entry: {
+export function toRuleEntry(entry: {
   path: string;
   state?: State | undefined;
   category?: string | undefined;

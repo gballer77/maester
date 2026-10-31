@@ -27,7 +27,7 @@ const CITADEL_HEADER = `# citadel.yaml
 
 `;
 
-const MAESTER_HEADER = `# maester.yaml
+export const MAESTER_HEADER = `# maester.yaml
 #
 # This file declares the documents this repository publishes to any citadel
 # that pulls from it. It is a manifest only — the documents themselves live

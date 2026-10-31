@@ -5,6 +5,7 @@ import picomatch from "picomatch";
 import { handlerFor } from "./format.js";
 import {
   DEFAULT_STATE,
+  type InlineMetadataRead,
   type InlineMetadataWrite,
   type ParseResult,
   type RuleEntry,
@@ -71,9 +72,9 @@ export type StateApplyResult = {
 
 const MATCHER_OPTIONS = { dot: false, nocase: false } as const;
 
-type CompiledRule = { rule: RuleEntry; match: (p: string) => boolean };
+export type CompiledRule = { rule: RuleEntry; match: (p: string) => boolean };
 
-function compileRules(rules: readonly RuleEntry[]): CompiledRule[] {
+export function compileRules(rules: readonly RuleEntry[]): CompiledRule[] {
   return rules.map((rule) => ({ rule, match: picomatch(rule.pattern, MATCHER_OPTIONS) }));
 }
 
@@ -120,7 +121,74 @@ async function* walk(dir: string, root: string): AsyncGenerator<string> {
   }
 }
 
-type Resolved<T> = { value: T | undefined; source: FieldSourceOfTruth };
+export type Resolved<T> = { value: T | undefined; source: FieldSourceOfTruth };
+
+export type ResolvedFileMetadata = {
+  state: State;
+  sourceOfTruth: SourceOfTruth;
+  category: Resolved<string>;
+  tags: Resolved<string[]>;
+  warnings: MetadataWarning[];
+};
+
+/**
+ * Resolve one file's `state`, `category` and `tags` from its inline values
+ * and the compiled rules — pure, no I/O. Shared by sync (which then writes
+ * the result into the file) and `maester publish preview` (§6.19, Gap 82),
+ * so the two cannot disagree.
+ */
+export function resolveFileMetadata(
+  relPath: string,
+  inline: InlineMetadataRead,
+  compiled: readonly CompiledRule[],
+): ResolvedFileMetadata {
+  const warnings: MetadataWarning[] = [];
+  let state: State;
+  let sourceOfTruth: SourceOfTruth;
+  const ruleState = findRuleState(relPath, compiled);
+  if (inline.state.kind === "valid") {
+    state = inline.state.value;
+    sourceOfTruth = "inline";
+    if (ruleState !== undefined && ruleState !== state) {
+      warnings.push({
+        type: "disagreement",
+        file: relPath,
+        field: "state",
+        inline: state,
+        rule: ruleState,
+      });
+    }
+  } else {
+    if (inline.state.kind === "invalid") {
+      warnings.push({ type: "bad-inline-state", file: relPath, raw: inline.state.raw });
+    }
+    state = ruleState ?? DEFAULT_STATE;
+    sourceOfTruth = ruleState !== undefined ? "rule" : "default";
+  }
+
+  const category = resolveField(
+    inline.category,
+    findRuleField(relPath, compiled, "category"),
+    (raw) => warnings.push({ type: "bad-inline-category", file: relPath, raw }),
+    (i, r) =>
+      warnings.push({
+        type: "disagreement",
+        file: relPath,
+        field: "category",
+        inline: i,
+        rule: r,
+      }),
+  );
+  const ruleTags = findRuleField(relPath, compiled, "tags");
+  const tags = resolveField(
+    inline.tags,
+    ruleTags === undefined ? undefined : [...ruleTags],
+    (raw) => warnings.push({ type: "bad-inline-tags", file: relPath, raw }),
+    (i, r) =>
+      warnings.push({ type: "disagreement", file: relPath, field: "tags", inline: i, rule: r }),
+  );
+  return { state, sourceOfTruth, category, tags, warnings };
+}
 
 /**
  * Resolve one optional field: inline > rule > unset. An invalid inline value
@@ -182,50 +250,14 @@ export async function applyInlineMetadata(
     const buf = await readFile(fullPath);
     const inline = handler.read(buf);
 
-    let state: State;
-    let sourceOfTruth: SourceOfTruth;
-    const ruleState = findRuleState(relPath, compiled);
-    if (inline.state.kind === "valid") {
-      state = inline.state.value;
-      sourceOfTruth = "inline";
-      if (ruleState !== undefined && ruleState !== state) {
-        warnings.push({
-          type: "disagreement",
-          file: relPath,
-          field: "state",
-          inline: state,
-          rule: ruleState,
-        });
-      }
-    } else {
-      if (inline.state.kind === "invalid") {
-        warnings.push({ type: "bad-inline-state", file: relPath, raw: inline.state.raw });
-      }
-      state = ruleState ?? DEFAULT_STATE;
-      sourceOfTruth = ruleState !== undefined ? "rule" : "default";
-    }
-
-    const category = resolveField(
-      inline.category,
-      findRuleField(relPath, compiled, "category"),
-      (raw) => warnings.push({ type: "bad-inline-category", file: relPath, raw }),
-      (i, r) =>
-        warnings.push({
-          type: "disagreement",
-          file: relPath,
-          field: "category",
-          inline: i,
-          rule: r,
-        }),
-    );
-    const ruleTags = findRuleField(relPath, compiled, "tags");
-    const tags = resolveField(
-      inline.tags,
-      ruleTags === undefined ? undefined : [...ruleTags],
-      (raw) => warnings.push({ type: "bad-inline-tags", file: relPath, raw }),
-      (i, r) =>
-        warnings.push({ type: "disagreement", file: relPath, field: "tags", inline: i, rule: r }),
-    );
+    const {
+      state,
+      sourceOfTruth,
+      category,
+      tags,
+      warnings: fileWarnings,
+    } = resolveFileMetadata(relPath, inline, compiled);
+    warnings.push(...fileWarnings);
 
     const resolved: InlineMetadataWrite = { state };
     if (category.value !== undefined) resolved.category = category.value;

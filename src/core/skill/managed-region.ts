@@ -1,5 +1,17 @@
-const BEGIN_MARKER_RE = /<!--\s*maester:skill:begin(?:\s+v=([^\s>]+))?\s*-->/;
-const END_MARKER_LITERAL = "<!-- maester:skill:end -->";
+/**
+ * Region names: `skill` is the Grand Maester's, `publisher` the Publisher's
+ * (architecture §6.19). Each skill kind owns one region, so two can share a
+ * file (`AGENTS.md`) and upgrade independently.
+ */
+export type RegionName = "skill" | "publisher";
+
+function beginMarkerRe(name: RegionName): RegExp {
+  return new RegExp(`<!--\\s*maester:${name}:begin(?:\\s+v=([^\\s>]+))?\\s*-->`);
+}
+
+function endMarker(name: RegionName): string {
+  return `<!-- maester:${name}:end -->`;
+}
 
 export type MarkdownRegion = {
   /** Bytes before the begin marker (preserved on rewrite). */
@@ -14,14 +26,18 @@ export type MarkdownRegion = {
  * Locate the maester-managed region in a Markdown file. Returns `undefined` when
  * no region is present (caller should treat the entire file as user content).
  */
-export function extractMarkdownRegion(text: string): MarkdownRegion | undefined {
-  const beginMatch = BEGIN_MARKER_RE.exec(text);
+export function extractMarkdownRegion(
+  text: string,
+  name: RegionName = "skill",
+): MarkdownRegion | undefined {
+  const beginMatch = beginMarkerRe(name).exec(text);
   if (!beginMatch) return undefined;
   const beginIdx = beginMatch.index;
   const afterBegin = beginIdx + beginMatch[0].length;
-  const endIdx = text.indexOf(END_MARKER_LITERAL, afterBegin);
+  const end = endMarker(name);
+  const endIdx = text.indexOf(end, afterBegin);
   if (endIdx < 0) return undefined;
-  const suffixStart = endIdx + END_MARKER_LITERAL.length;
+  const suffixStart = endIdx + end.length;
   return {
     prefix: text.slice(0, beginIdx),
     suffix: text.slice(suffixStart),
@@ -40,15 +56,16 @@ export function replaceMarkdownRegion(
   body: string,
   version: string,
   preambleWhenAbsent = "",
+  name: RegionName = "skill",
 ): string {
-  const region = renderManagedRegion(body, version);
+  const region = renderManagedRegion(body, version, name);
   if (existing === undefined) {
     if (preambleWhenAbsent.length === 0) {
       return `${region}\n`;
     }
     return `${preambleWhenAbsent}${preambleWhenAbsent.endsWith("\n") ? "" : "\n"}${region}\n`;
   }
-  const found = extractMarkdownRegion(existing);
+  const found = extractMarkdownRegion(existing, name);
   if (!found) {
     const sep = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
     return `${existing}${sep}${region}\n`;
@@ -56,9 +73,9 @@ export function replaceMarkdownRegion(
   return `${found.prefix}${region}${found.suffix}`;
 }
 
-function renderManagedRegion(body: string, version: string): string {
+function renderManagedRegion(body: string, version: string, name: RegionName): string {
   const inner = body.endsWith("\n") ? body.slice(0, -1) : body;
-  return `<!-- maester:skill:begin v=${version} -->\n${inner}\n${END_MARKER_LITERAL}`;
+  return `<!-- maester:${name}:begin v=${version} -->\n${inner}\n${endMarker(name)}`;
 }
 
 export type ClaudeSettings = Record<string, unknown>;

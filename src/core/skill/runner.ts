@@ -1,11 +1,13 @@
 import { refreshMcpRegistrations } from "../mcp/registrations/index.js";
 import { dedupeTargets, getTarget, listSkillTargets } from "./targets/index.js";
-import type {
-  SkillInstallOutcome,
-  SkillInstallResult,
-  SkillStatusOutcome,
-  SkillStatusResult,
-  SkillTargetId,
+import {
+  SKILL_KINDS,
+  type SkillInstallOutcome,
+  type SkillInstallResult,
+  type SkillKind,
+  type SkillStatusOutcome,
+  type SkillStatusResult,
+  type SkillTargetId,
 } from "./types.js";
 import { SKILL_VERSION } from "./version.js";
 
@@ -16,6 +18,8 @@ function selectMcpHosts(targetIds: readonly SkillTargetId[]): SkillTargetId[] {
 }
 
 export type RunSkillInstallOpts = {
+  /** Defaults to the Grand Maester. The Publisher needs no MCP refresh (§6.19). */
+  kind?: SkillKind;
   targets: readonly SkillTargetId[];
   mode: "install" | "add-target";
   citadelBaseDir: string;
@@ -28,11 +32,12 @@ export async function runSkillInstall(
   if (opts.targets.length === 0) {
     throw new Error("At least one target id must be supplied.");
   }
+  const kind = opts.kind ?? "grand-maester";
   // Validate every requested id before any write.
-  const targets = opts.targets.map((id) => getTarget(id));
+  const targets = opts.targets.map((id) => getTarget(id, kind));
   const groups = dedupeTargets(targets);
   const outcomes: SkillInstallOutcome[] = [];
-  for (const group of groups) {
+  for (const group of groups.map((g) => ({ ...g, kind }))) {
     const writeOutcome = await safeWrite(group.primary.write, {
       repoRoot,
       skillVersion: SKILL_VERSION,
@@ -43,6 +48,7 @@ export async function runSkillInstall(
       const labelValue = group.labels[i];
       if (idValue === undefined || labelValue === undefined) continue;
       outcomes.push({
+        kind: group.kind,
         id: idValue,
         label: labelValue,
         artifactPaths: group.artifactPaths,
@@ -54,13 +60,15 @@ export async function runSkillInstall(
       });
     }
   }
-  const mcpHosts = selectMcpHosts(opts.targets);
+  const mcpHosts = kind === "grand-maester" ? selectMcpHosts(opts.targets) : [];
   const mcpRegistrations =
     mcpHosts.length > 0 ? await refreshMcpRegistrations(repoRoot, { scopeTo: mcpHosts }) : [];
   return { outcomes, counts: countOutcomes(outcomes), mcpRegistrations };
 }
 
 export type RunSkillUpgradeOpts = {
+  /** Restrict to one skill kind; every installed kind when omitted. */
+  kinds?: readonly SkillKind[];
   check?: boolean;
   citadelBaseDir: string;
 };
@@ -69,7 +77,7 @@ export async function runSkillUpgrade(
   repoRoot: string,
   opts: RunSkillUpgradeOpts,
 ): Promise<SkillInstallResult> {
-  const installedGroups = await findInstalledGroups(repoRoot);
+  const installedGroups = await findInstalledGroups(repoRoot, opts.kinds ?? SKILL_KINDS);
   if (installedGroups.length === 0) {
     return { outcomes: [], counts: countOutcomes([]), mcpRegistrations: [] };
   }
@@ -84,6 +92,7 @@ export async function runSkillUpgrade(
         const labelValue = group.labels[i];
         if (idValue === undefined || labelValue === undefined) continue;
         outcomes.push({
+          kind: group.kind,
           id: idValue,
           label: labelValue,
           artifactPaths: group.artifactPaths,
@@ -103,6 +112,7 @@ export async function runSkillUpgrade(
       const labelValue = group.labels[i];
       if (idValue === undefined || labelValue === undefined) continue;
       outcomes.push({
+        kind: group.kind,
         id: idValue,
         label: labelValue,
         artifactPaths: group.artifactPaths,
@@ -116,16 +126,41 @@ export async function runSkillUpgrade(
   }
   // Refresh MCP registrations for every installed MCP-capable host —
   // upgrade can run after a connector was added between sessions.
-  const mcpRegistrations = opts.check === true ? [] : await refreshMcpRegistrations(repoRoot);
+  const upgradesGrandMaester = installedGroups.some((g) => g.kind === "grand-maester");
+  const mcpRegistrations =
+    opts.check === true || !upgradesGrandMaester ? [] : await refreshMcpRegistrations(repoRoot);
   return { outcomes, counts: countOutcomes(outcomes), mcpRegistrations };
 }
 
-export async function runSkillStatus(repoRoot: string): Promise<SkillStatusResult> {
+/**
+ * Status rows. With `kinds`, every target of those kinds. Otherwise every
+ * kind with at least one installed target — or, when nothing is installed,
+ * the Grand Maester's targets, as before skill kinds existed.
+ */
+export async function runSkillStatus(
+  repoRoot: string,
+  opts: { kinds?: readonly SkillKind[] } = {},
+): Promise<SkillStatusResult> {
+  let kinds = opts.kinds;
+  if (kinds === undefined) {
+    const installed: SkillKind[] = [];
+    for (const kind of SKILL_KINDS) {
+      for (const target of listSkillTargets(kind)) {
+        if ((await target.readInstalledVersion(repoRoot)) !== undefined) {
+          installed.push(kind);
+          break;
+        }
+      }
+    }
+    kinds = installed.length > 0 ? installed : ["grand-maester"];
+  }
   const outcomes: SkillStatusOutcome[] = [];
   let upToDate = 0;
   let outdated = 0;
   let notInstalled = 0;
-  for (const target of listSkillTargets()) {
+  for (const [kind, target] of kinds.flatMap((k) =>
+    listSkillTargets(k).map((t) => [k, t] as const),
+  )) {
     const installedVersion = await target.readInstalledVersion(repoRoot);
     let state: SkillStatusOutcome["state"];
     if (installedVersion === undefined) {
@@ -139,6 +174,7 @@ export async function runSkillStatus(repoRoot: string): Promise<SkillStatusResul
       outdated += 1;
     }
     outcomes.push({
+      kind,
       id: target.id,
       label: target.label,
       artifactPaths: target.artifactPaths,
@@ -155,6 +191,7 @@ export async function runSkillStatus(repoRoot: string): Promise<SkillStatusResul
 
 export { listSkillTargets } from "./targets/index.js";
 export type {
+  SkillKind,
   SkillInstallOutcome,
   SkillInstallResult,
   SkillStatusOutcome,
@@ -174,14 +211,19 @@ async function safeWrite(
   }
 }
 
-async function findInstalledGroups(repoRoot: string): Promise<ReturnType<typeof dedupeTargets>> {
-  const targets = listSkillTargets();
-  const installed = [];
-  for (const target of targets) {
-    const installedVersion = await target.readInstalledVersion(repoRoot);
-    if (installedVersion !== undefined) installed.push(target);
+async function findInstalledGroups(
+  repoRoot: string,
+  kinds: readonly SkillKind[],
+): Promise<(ReturnType<typeof dedupeTargets>[number] & { kind: SkillKind })[]> {
+  const groups = [];
+  for (const kind of kinds) {
+    const installed = [];
+    for (const target of listSkillTargets(kind)) {
+      if ((await target.readInstalledVersion(repoRoot)) !== undefined) installed.push(target);
+    }
+    groups.push(...dedupeTargets(installed).map((g) => ({ ...g, kind })));
   }
-  return dedupeTargets(installed);
+  return groups;
 }
 
 function countOutcomes(outcomes: readonly SkillInstallOutcome[]): SkillInstallResult["counts"] {

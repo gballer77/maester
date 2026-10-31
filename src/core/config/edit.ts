@@ -8,6 +8,7 @@ import { type CitadelConfig, CitadelConfigSchema } from "../../schemas/citadel.j
 import { type MaesterConfig, MaesterConfigSchema } from "../../schemas/maester.js";
 import { ConfigError } from "../errors.js";
 import { citadelConfigPath, maesterConfigPath } from "./paths.js";
+import { MAESTER_HEADER } from "./writer.js";
 
 /**
  * Config editing (architecture §6.18): append or remove one entry by editing
@@ -77,6 +78,19 @@ export async function openConfigForEdit<R extends EditRole>(
   return { role, filePath, doc, config, unknownKeys };
 }
 
+/**
+ * A handle on a manifest that does not exist yet (architecture §6.19, Gap 78):
+ * the standard header comment, `schemaVersion: 1` and an empty `documents`
+ * list. The first `commitEdit()` creates the file atomically.
+ */
+export function createConfigForEdit(repoRoot: string, role: "maester"): EditHandle<"maester"> {
+  const spec = ROLES[role];
+  const filePath = spec.path(repoRoot);
+  const doc = parseDocument(`${MAESTER_HEADER}schemaVersion: 1\ndocuments: []\n`);
+  const config = validate(doc, spec.schema, [], filePath);
+  return { role, filePath, doc, config, unknownKeys: [] };
+}
+
 /** Append `value` to the role's list (`sources` / `documents`), creating it if absent. */
 export function appendEntry<R extends EditRole>(handle: EditHandle<R>, value: unknown): void {
   const key = ROLES[handle.role].listKey;
@@ -103,13 +117,42 @@ export function removeEntry<R extends EditRole>(handle: EditHandle<R>, index: nu
 }
 
 /**
+ * Set and clear fields of the entry at `index` in place (§6.19). The entry's
+ * other keys, their order and comments are untouched; a replaced sequence
+ * keeps the flow / block style of the value it replaces.
+ */
+export function updateEntry<R extends EditRole>(
+  handle: EditHandle<R>,
+  index: number,
+  set: Readonly<Record<string, unknown>>,
+  unset: readonly string[] = [],
+): void {
+  const seq = handle.doc.get(ROLES[handle.role].listKey, true);
+  const entry = isSeq(seq) ? seq.items[index] : undefined;
+  if (!isMap(entry)) throw new Error(`no entry at index ${index}`);
+  for (const [key, value] of Object.entries(set)) {
+    if (value === undefined) continue;
+    const previous = entry.get(key, true);
+    const node = handle.doc.createNode(value);
+    if (isSeq(previous) && isSeq(node)) node.flow = previous.flow === true;
+    entry.set(key, node);
+  }
+  for (const key of unset) entry.delete(key);
+}
+
+/** Validate the edited document without writing; throws `ConfigError` like `commitEdit`. */
+export function validateEdit<R extends EditRole>(handle: EditHandle<R>): ConfigFor<R> {
+  const spec = ROLES[handle.role] as RoleSpec<ConfigFor<R>>;
+  return validate(handle.doc, spec.schema, handle.unknownKeys, handle.filePath);
+}
+
+/**
  * Re-validate the edited document and replace the file atomically: write a
  * sibling temp file, fsync, rename over the target. Any failure leaves the
  * original untouched and removes the temp file.
  */
 export async function commitEdit<R extends EditRole>(handle: EditHandle<R>): Promise<ConfigFor<R>> {
-  const spec = ROLES[handle.role] as RoleSpec<ConfigFor<R>>;
-  const config = validate(handle.doc, spec.schema, handle.unknownKeys, handle.filePath);
+  const config = validateEdit(handle);
   // No padding inside flow collections: `[a, b]` round-trips as written (P2, best-effort).
   await writeFileAtomic(handle.filePath, handle.doc.toString({ flowCollectionPadding: false }));
   return config;

@@ -106,16 +106,7 @@ export async function fetchLocalSource(
   if (entry.excludes && entry.excludes.length > 0) {
     warnings.push({ type: "excludes-ignored", name: entry.name, filterMode: resolution.mode });
   }
-  const files = (
-    await globby(resolution.patterns, {
-      cwd: real,
-      dot: false,
-      onlyFiles: true,
-      followSymbolicLinks: false,
-      gitignore: false,
-      ignore: ["**/.git/**"],
-    })
-  ).sort();
+  const files = await resolveManifestFiles(real, resolution.patterns);
   if (resolution.mode === "includes" && files.length === 0) {
     warnings.push({ type: "no-matches", name: entry.name, includes: resolution.patterns });
   }
@@ -127,6 +118,27 @@ export async function fetchLocalSource(
     fingerprint: await fingerprintTree(real, files, { content: mode === "copy" }),
     warnings,
   };
+}
+
+/**
+ * The files a list of manifest / includes patterns selects in a directory.
+ * Shared with `maester publish preview` (§6.19, Gap 82) so the preview and
+ * a path-source sync select exactly the same files.
+ */
+export async function resolveManifestFiles(
+  root: string,
+  patterns: readonly string[],
+): Promise<string[]> {
+  return (
+    await globby([...patterns], {
+      cwd: root,
+      dot: false,
+      onlyFiles: true,
+      followSymbolicLinks: false,
+      gitignore: false,
+      ignore: ["**/.git/**"],
+    })
+  ).sort();
 }
 
 /**

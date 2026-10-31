@@ -56,6 +56,34 @@ Once `citadel.yaml` or `maester.yaml` exists, change it with the same prompts th
 - `remove` won't delete the last entry: a citadel needs one source, and an empty `documents` list would publish the whole repository.
 - Removing a source leaves its synced folder on disk; delete it yourself if you no longer need it.
 
+## Let your agent define the manifest
+
+Your own coding agent can propose `maester.yaml` for you: which documents to publish, plus a description, category, tags and state for each. *maester never calls a model.* It installs instructions for the agent and gives it read-only grounding commands and one validated write path.
+
+```sh
+npx baller-maester skill install --skill publisher   # Claude Code, Codex, Cursor, AGENTS.md
+```
+
+Then ask the agent to "set this repo up as a maester" or "tidy up maester.yaml". The Publisher skill makes it:
+
+1. **Ground itself:** `publish list --json` and `publish inventory --json` (candidate documents, inline metadata, coverage, the vocabulary in use, sensitive files).
+2. **Draft and validate:** a JSON change set, checked with `publish apply --dry-run` and `publish preview --from -`.
+3. **Show you the full proposal:** a table with a rationale per entry, exclusions, and any new categories or tags.
+4. **Write only what you approve,** through `publish apply`. It never hand-edits the manifest or touches document content.
+
+The same commands work without an agent:
+
+| Command | What it does |
+|---|---|
+| `maester publish inventory [--all] [--limit n]` | Read-only. Candidate documents, which entry covers each, the vocabulary in use, a per-directory rollup and a `sensitive` list. |
+| `maester publish preview [--from <file>\|-]` | Read-only. The files each entry (current or proposed) publishes, with their effective state / category / tags. Flags `empty-entry` and `redundant` entries. |
+| `maester publish apply [--from <file>\|-] [--create] [--dry-run]` | Applies a change set (`add` / `update` / `remove`) atomically, or nothing at all. |
+| `maester publish add \| update \| remove --path …` | One-entry versions of `apply`, with field flags (`--description`, `--category`, `--tags`, `--state`, `--unset`). Never prompt. |
+
+- **Safety guards:** narrowing a whole-repository publish needs `acknowledgeNarrowing` (`--acknowledge-narrowing`). Paths that match sensitive files (`.env`, keys, `secrets/`, …) need `allowSensitive` (`--allow-sensitive`). The last entry can't be removed.
+- **Exit codes:** `0` ok, `2` invalid change set or refused edit, with `{"ok": false, "error": {"field", "path", "message"}}` under `--json`.
+- `maester publish` offers to install the Publisher skill at the end of its walkthrough. Manage it with `maester skill upgrade | status --skill publisher`.
+
 ## Pulling from sources you don't own
 
 Every entry in `citadel.yaml` is a **source** — a remote git repo. Each source resolves to one of three modes, checked in this order:

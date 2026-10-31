@@ -1,8 +1,13 @@
 export type SkillTargetId = "claude-code" | "codex" | "cursor" | "agents-md";
 
+/** Which skill: the citadel-side Grand Maester or the maester-side Publisher (§6.19). */
+export type SkillKind = "grand-maester" | "publisher";
+export const SKILL_KINDS: readonly SkillKind[] = ["grand-maester", "publisher"];
+
 export type SkillAction = "installed" | "upgraded" | "unchanged" | "failed";
 
 export type SkillInstallOutcome = {
+  kind: SkillKind;
   id: SkillTargetId;
   label: string;
   artifactPaths: readonly string[];
@@ -37,6 +42,7 @@ export type SkillInstallResult = {
 export type SkillStatusOutcomeState = "up-to-date" | "outdated" | "not-installed";
 
 export type SkillStatusOutcome = {
+  kind: SkillKind;
   id: SkillTargetId;
   label: string;
   artifactPaths: readonly string[];

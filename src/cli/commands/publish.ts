@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 import type { Command } from "commander";
 import { detectRoles } from "../../core/config/paths.js";
 import { detectDuplicatePaths, finalizeMaesterManifest } from "../../core/publish/finalize.js";
+import { type SkillTargetId, listSkillTargets, runSkillInstall } from "../../core/skill/runner.js";
+import { DEFAULT_BASE_DIR } from "../../schemas/citadel.js";
 import type { PublishedDocument } from "../../schemas/maester.js";
 import { PromptCancelledError } from "../../ui/prompts.js";
 import type { CliContext } from "../context.js";
@@ -12,6 +14,7 @@ import {
   collectOneDocument,
 } from "./document-prompt.js";
 import { registerPublishEdit } from "./edit.js";
+import { registerPublishAgent } from "./publish-agent.js";
 
 export { buildPublishedDocumentStateField };
 
@@ -25,6 +28,7 @@ export function registerPublish(program: Command, getContext: () => CliContext):
       await runPublish(getContext());
     });
   registerPublishEdit(publish, getContext);
+  registerPublishAgent(publish, getContext);
 }
 
 export async function runPublish(ctx: CliContext): Promise<number> {
@@ -116,6 +120,47 @@ export async function runPublish(ctx: CliContext): Promise<number> {
       ? `Wrote ${result.maesterPath} — the whole repository is published`
       : `Wrote ${result.maesterPath} (${result.documentCount} document(s))`,
   );
+  await offerPublisherSkill(ctx);
   ctx.prompts.outro("Consuming citadels will pick up this manifest at their next `maester sync`.");
   return 0;
+}
+
+/**
+ * Final, optional step (architecture §6.19, Gap 83): install the Publisher
+ * so the user's coding agent can maintain this manifest. Defaults to No; a
+ * cancel here only skips the install — the manifest is already written.
+ */
+async function offerPublisherSkill(ctx: CliContext): Promise<void> {
+  try {
+    const install = await ctx.prompts.confirm({
+      message:
+        "Install the Publisher agent skill? It lets your coding agent propose and maintain maester.yaml entries for your review.",
+      initialValue: false,
+    });
+    if (!install) return;
+    const targets = await ctx.prompts.multiselect<SkillTargetId>({
+      message: "Which agent(s) should the Publisher be installed for?",
+      options: listSkillTargets("publisher").map((t) => ({ value: t.id, label: t.label })),
+      initialValues: ["claude-code"] as SkillTargetId[],
+      required: true,
+    });
+    const result = await runSkillInstall(ctx.repoRoot.path, {
+      kind: "publisher",
+      targets,
+      mode: "install",
+      citadelBaseDir: DEFAULT_BASE_DIR,
+    });
+    for (const o of result.outcomes) {
+      if (o.action === "failed") {
+        ctx.prompts.log.error(`Publisher · ${o.label}: failed${o.error ? ` — ${o.error}` : ""}`);
+      } else {
+        ctx.prompts.log.success(
+          `Publisher · ${o.label}: ${o.action} → ${o.artifactPaths.join(", ")}`,
+        );
+      }
+    }
+  } catch (err) {
+    if (err instanceof PromptCancelledError) return;
+    throw err;
+  }
 }

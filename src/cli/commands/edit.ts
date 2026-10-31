@@ -9,6 +9,7 @@ import {
   openConfigForEdit,
   removeEntry,
 } from "../../core/config/edit.js";
+import { maesterConfigPath } from "../../core/config/paths.js";
 import { ConfigError } from "../../core/errors.js";
 import { detectDestinationCollisions } from "../../core/init/finalize.js";
 import { DEFAULT_BASE_DIR, type Source } from "../../schemas/citadel.js";
@@ -18,6 +19,14 @@ import { PromptCancelledError } from "../../ui/prompts.js";
 import type { CliContext } from "../context.js";
 import { collectOneDocument } from "./document-prompt.js";
 import { promptSourceEntry } from "./init.js";
+import {
+  type FieldFlags,
+  type WriteFlags,
+  runFlagAdd,
+  runFlagRemove,
+  withFieldFlags,
+  withWriteFlags,
+} from "./publish-agent.js";
 
 /**
  * Config-editing verbs (architecture §6.18): `maester add | remove | list` on
@@ -56,17 +65,36 @@ export function registerEdit(program: Command, getContext: () => CliContext): vo
 
 /** Attach `add | remove | list` to the existing `maester publish` command. */
 export function registerPublishEdit(publish: Command, getContext: () => CliContext): void {
-  publish
-    .command("add")
-    .description("Add a published document to this maester (same prompts as `maester publish`).")
-    .action(async () => {
-      process.exitCode = await runDocumentAdd(getContext());
-    });
+  withWriteFlags(
+    withFieldFlags(
+      publish
+        .command("add")
+        .description(
+          "Add a published document to this maester (same prompts as `maester publish`). With --path, runs without prompts.",
+        )
+        .option("--path <path>", "Non-interactive: the file or glob to publish.")
+        .option("--create", "With --path: create maester.yaml when it does not exist."),
+    ),
+  ).action(async (options: WriteFlags & FieldFlags & { path?: string }) => {
+    const ctx = getContext();
+    process.exitCode =
+      options.path !== undefined
+        ? await runFlagAdd(ctx, { ...options, path: options.path })
+        : await runDocumentAdd(ctx);
+  });
   publish
     .command("remove")
-    .description("Remove a published document from this maester.")
-    .action(async () => {
-      process.exitCode = await runDocumentRemove(getContext());
+    .description(
+      "Remove a published document from this maester. With --path, runs without prompts.",
+    )
+    .option("--path <path>", "Non-interactive: the entry's path, exactly as written.")
+    .option("--dry-run", "With --path: validate and print the result without writing.")
+    .action(async (options: WriteFlags & { path?: string }) => {
+      const ctx = getContext();
+      process.exitCode =
+        options.path !== undefined
+          ? await runFlagRemove(ctx, { ...options, path: options.path })
+          : await runDocumentRemove(ctx);
     });
   publish
     .command("list")
@@ -261,8 +289,24 @@ export async function runDocumentRemove(ctx: CliContext): Promise<number> {
 }
 
 export async function runDocumentList(ctx: CliContext): Promise<number> {
+  if (ctx.flags.json && !existsSync(maesterConfigPath(ctx.repoRoot.path))) {
+    process.stdout.write(
+      `${JSON.stringify({ manifest: "none", filePath: maesterConfigPath(ctx.repoRoot.path), documents: [] })}\n`,
+    );
+    return EXIT_OK;
+  }
   return guarded(ctx, "maester", "", async (handle) => {
     const documents = handle.config.documents ?? [];
+    if (ctx.flags.json) {
+      process.stdout.write(
+        `${JSON.stringify({
+          manifest: documents.length === 0 ? "whole-repository" : "listed",
+          filePath: handle.filePath,
+          documents,
+        })}\n`,
+      );
+      return EXIT_OK;
+    }
     if (documents.length === 0) {
       process.stdout.write(
         `No documents listed — ${handle.filePath} publishes the whole repository.\n`,

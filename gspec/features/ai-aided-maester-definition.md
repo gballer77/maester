@@ -75,37 +75,37 @@ spec-version: v1
 
 ## 4. Capabilities
 
-- [ ] **P0**: Published-document entries can be added, updated, removed and listed without prompts
+- [x] **P0**: Published-document entries can be added, updated, removed and listed without prompts
   - Add accepts path, description, category, tags and state as arguments. Update accepts any subset of those, keyed by the entry's path. Every write runs the same validation as the interactive flow (path well-formed and repo-relative, slug rules for category and tags, allowed state values, no duplicate paths). An invalid value exits with a non-zero code and a message naming the field, and leaves the file unchanged.
   - Writes keep comments, key order and untouched entries, and replace the file atomically, exactly like the interactive editing verbs.
   - List supports a machine-readable output that includes every field of every entry, and states explicitly when the manifest publishes the whole repository.
   - Existing guard rails still apply:
     - Removing the last entry is refused.
     - Adding the first entry to a whole-repository manifest needs an explicit acknowledgement argument. Without it, the add is refused with a message explaining that publishing changes from the whole repository to only the listed documents.
-- [ ] **P0**: The Publisher integration can be installed for each supported agent target
+- [x] **P0**: The Publisher integration can be installed for each supported agent target
   - The existing skill-management command can install, upgrade and add targets for the Publisher. Installing it next to the citadel-side integration leaves both working.
   - Install is offered at the end of the interactive maester configuration flow, and is available on its own later.
   - On every target, the installed instructions describe the proposal-then-confirm workflow, the allowed write commands, and the rule that document content is never edited.
   - Upgrade refreshes the Publisher's managed content and keeps sections the user added.
-- [ ] **P0**: The agent proposes a complete manifest when none exists, and writes it only after confirmation
+- [x] **P0**: The agent proposes a complete manifest when none exists, and writes it only after confirmation
   - The proposal lists every entry with its path or glob, description, category, tags, state, and a one-line rationale. It also lists notable exclusions and the reason for each.
   - The agent asks for approval of the whole proposal, applies any edits the user requests, and writes nothing until the user approves.
   - After approval, every entry is written through the non-interactive commands. The agent then shows the resulting entry list and suggests reviewing the change in version control.
   - If the user declines, no maester configuration file is created.
-- [ ] **P0**: The agent proposes changes to an existing manifest, and changes only what the user approves
+- [x] **P0**: The agent proposes changes to an existing manifest, and changes only what the user approves
   - The proposal is grouped into additions, removals (entries matching no files) and metadata fill-ins (missing description, category or tags). Each item has a rationale.
   - Existing entries that need no change are left alone. Any change to an existing entry's populated field is called out as a modification and needs its own approval.
   - Declined items are not written. Approved items are written through the non-interactive commands.
-- [ ] **P1**: A read-only inventory command reports candidate documents for the agent to reason over
+- [x] **P1**: A read-only inventory command reports candidate documents for the agent to reason over
   - Output is machine-readable and lists documentation-like files with their path and size, plus any inline state, category and tags already in the file.
   - Each file is marked with the existing manifest entry that covers it, or as uncovered.
   - It applies the same built-in excludes as whole-repository publishing (version-control, dependency and build directories, binaries, oversized files), and never reads or prints file contents beyond inline metadata.
   - Likely-sensitive files (environment files, key material, credential stores) are flagged so the agent leaves them out.
-- [ ] **P1**: Proposals reuse the repository's existing metadata vocabulary
+- [x] **P1**: Proposals reuse the repository's existing metadata vocabulary
   - The inventory and list output together expose every category and tag already in use, from both the manifest and inline headers.
   - The Publisher instructs the agent to prefer an existing category or tag over a new near-synonym, and to label any newly introduced value as "new" in the proposal.
   - The agent states its state choice per entry: `canon` for authoritative material, `draft` for work in progress, or "file header" when files already carry their own state.
-- [ ] **P2**: A preview shows exactly which files each entry would publish
+- [x] **P2**: A preview shows exactly which files each entry would publish
   - For the current or a proposed set of entries, it lists the files each entry resolves to and the effective state, category and tags each file would carry after inline precedence is applied.
   - Entries that resolve to no files, and files matched by more than one entry, are flagged.
   - The preview never writes anything, and the agent can include its summary in a proposal.
