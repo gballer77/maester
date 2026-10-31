@@ -35,7 +35,7 @@ This is a single-package, ESM-only Node.js library that ships a CLI binary. Ther
 | [Document State Tagging](features/document-state-tagging.md) | New `src/core/state/` cluster (`schema.ts`, `format.ts`, `markdown.ts`, `html.ts`, `yaml.ts`, `json.ts`, `plaintext.ts`, `applier.ts`). Schema additions: `state` field on `PublishedDocument`, enriched object form (`{ path, state }`) on `Source.includes`. The applier slots into `src/core/sync/runner.ts` between staging and atomic promote — every materialized file in a supported format carries its resolved state inline at the citadel destination. |
 | [Citadel Status](features/citadel-status.md) | `src/cli/commands/status.ts` (CLI binding) calling `src/core/status/runner.ts`, which calls `src/core/status/probe.ts` per source. The probe uses `git ls-remote` for the commit SHA and a one-blob partial-clone + sparse-checkout into an ephemeral temp dir for the remote `maester.yaml`. Reuses `src/core/config/loader.ts`, `src/core/auth/resolver.ts`, and `src/core/sync/provenance.ts` (read-only). Never writes to a destination, never mutates `.maester/cache/`, never rewrites a provenance marker. |
 | [Grand Maester Skill](features/grand-maester-skill.md) | New `src/core/skill/` cluster (`runner.ts`, per-agent target writers under `targets/`, the `managed-region.ts` convention, `version.ts`, `runtime.ts`, and templates under `templates/`) plus `src/cli/commands/skill.ts` for the `maester skill <verb>` group. The same install/upgrade orchestration is invoked from `src/cli/commands/init.ts` at the end of the citadel walkthrough when the user opts in. The PreToolUse hook on Claude Code is path-scoped to citadel reads and delegates to `maester skill runtime preread`, which reuses `src/core/status/runner.ts`. See §6.10. |
-| [Traveling Maesters](features/traveling-maesters.md) | New `src/core/connectors/` cluster (compile-time type registry + per-type implementations under `types/<type-id>/`, shared dispatch and error mapping) and `src/core/mcp/` cluster (stdio MCP server built on `@modelcontextprotocol/sdk` plus per-host config writers under `registrations/`). New CLI verbs `maester mcp` (runs the server, registered in `src/cli/commands/mcp.ts`) and `maester connector <add\|remove\|list\|exec>` (`src/cli/commands/connector.ts`, where `exec <name> <op>` is the fallback dispatch for non-MCP hosts). Citadel schema in `src/schemas/citadel.ts` gains an optional `connectors` array; per-type config validation runs in a Zod `superRefine` that consults the registry. Init walkthrough adds a connector-registration step between source registration and the Grand Maester offer; standalone `maester connector add/remove` refresh installed per-host MCP registrations. Grand Maester install/upgrade writes the maester MCP server entry into each installed MCP-capable target's config alongside the existing skill artifacts. See §6.11. |
+| [Traveling Maesters](features/traveling-maesters.md) | New `src/core/connectors/` cluster (compile-time type registry + per-type implementations under `types/<type-id>/`, shared dispatch and error mapping) and `src/core/mcp/` cluster (stdio MCP server built on `@modelcontextprotocol/sdk` plus per-host config writers under `registrations/`). New CLI verbs `maester mcp` (runs the server, registered in `src/cli/commands/mcp.ts`) and `maester connector <add\|remove\|list\|refresh\|tools\|exec>` (`src/cli/commands/connector.ts`, where `exec <name> <op>` is the fallback dispatch for non-MCP hosts and `tools` prints the resolved tool surface without starting an MCP session). Citadel schema in `src/schemas/citadel.ts` gains an optional `connectors` array; per-type config validation runs in a Zod `superRefine` that consults the registry. Init walkthrough adds a connector-registration step between source registration and the Grand Maester offer; standalone `maester connector add/remove` refresh installed per-host MCP registrations. Grand Maester install/upgrade writes the maester MCP server entry into each installed MCP-capable target's config alongside the existing skill artifacts. See §6.11. |
 | [GitLab Issues Connector](features/gitlab-issues-connector.md) | New `src/core/connectors/types/gitlab-issues/` cluster: `schema.ts` (per-type config), `client.ts` (thin native-`fetch` facade over `/api/v4`), `operations.ts` (the two operation handlers — `list-issues`, `get-issue`), `output.ts` (issue-object shape + `dataSchema: 1` version), `errors.ts` (HTTP-status-to-error-code mapping). Registered with the connector type registry under identifier `gitlab-issues`. Pure leaf module — never imported by the framework directly; only the registry references it. See §6.12. |
 | [Whole-Repository Sources](features/whole-repository-sources.md) | New `src/core/sources/filter-mode.ts` (single precedence chokepoint: includes → manifest → whole-repository) and `src/core/sources/excludes.ts` (built-in exclude list + binary/oversize sniffing). `src/core/sources/git-source.ts` gains the whole-repository Stage 2 branch; `Source.excludes` added to `src/schemas/citadel.ts`; `MaesterConfig.documents` relaxed to allow zero entries in `src/schemas/maester.ts`. The resolved `filterMode` and effective excludes are recorded in the provenance marker. Whole-repository content is **always linked** — git sources link into `.maester/cache/<name>/` via `src/core/sync/link.ts`, and the destination is gitignored. See §6.13. |
 | [Local Maesters](features/local-maesters.md) | `Source.path` + `Source.mode` in `src/schemas/citadel.ts`. `src/core/sources/fetcher.ts` becomes a dispatcher over `git-source.ts` (existing git logic, moved) and the new `local-source.ts` (filesystem resolution, no git). New `src/core/sources/local-path.ts` (`~` / `${VAR}` expansion + overlap checks) and `src/core/sources/fingerprint.ts`. Link-mode materialization in new `src/core/sync/link.ts`; copy mode reuses `stage.ts`. Provenance marker becomes a v2 discriminated union (`kind: git \| path`). Status gains a no-network path-source branch in `src/core/status/local-probe.ts`. P2 linked-document MCP tools live in `src/core/mcp/linked-docs.ts`. See §6.14. |
@@ -43,6 +43,7 @@ This is a single-package, ESM-only Node.js library that ships a CLI binary. Ther
 | [Connector Env-Var Seeding](features/connector-env-seeding.md) | `src/core/mcp/registrations/env-vars.ts` collects the forwarded env-var set; the Claude Code and Codex writers merge it into their `maester` entry with a managed-name ledger (`_maesterManagedEnv` / `_maester_managed_env_vars`) so user-added names survive refresh; the Cursor Grand Maester target lists the names in its artifact. Rides on the existing `refreshMcpRegistrations()` triggers. See §6.16. |
 | [Citadel MCP Servers](features/citadel-mcp-servers.md) | `CitadelConfig.mcpServers` in `src/schemas/citadel.ts`. New `src/core/mcp/proxy/` cluster (`upstream.ts` — SDK `Client` over stdio or Streamable HTTP; `pool.ts` — concurrent bounded startup, tool aggregation, call forwarding, shutdown; `tool-name.ts`; `reasons.ts`). `src/core/mcp/server.ts` merges proxied tools into `tools/list`. Direct-mode host entries rendered by new `src/core/mcp/registrations/direct.ts`. New `maester mcp-server <add\|remove\|list\|check>` in `src/cli/commands/mcp-server.ts`; init gains an optional step after connectors. See §6.17. |
 | [Config Editing](features/config-editing.md) | `src/cli/commands/edit.ts` (`maester add\|remove\|list` on sources; `maester publish add\|remove\|list` on documents) over a comment-preserving, atomic edit engine in `src/core/config/edit.ts`. Reuses `promptSourceEntry()` (init) and `collectOneDocument()` (`src/cli/commands/document-prompt.ts`). The top-level menu gains the six verbs for configured roles. See §6.18. |
+| [AI-Aided Maester Definition](features/ai-aided-maester-definition.md) | A second skill kind, `publisher`, in `src/core/skill/` (its own artifacts and managed region, shared writers and `SKILL_VERSION`). New `src/core/publisher/` cluster: `change-set.ts` (the one atomic write path), `inventory.ts`, `sensitive.ts`, `preview.ts`. `src/cli/commands/publish-agent.ts` adds `publish apply \| update \| inventory \| preview` and the flag modes of `publish add \| remove`. `src/core/config/edit.ts` gains `updateEntry()` and `createConfigForEdit()`. The tool never calls a model. See §6.19. |
 
 ---
 
@@ -71,6 +72,7 @@ maester/
 │   │       ├── mcp.ts                   # `maester mcp` — runs the stdio MCP server in cwd
 │   │       ├── mcp-server.ts            # `maester mcp-server <add|remove|list|check>` (third-party MCP servers — §6.17)
 │   │       ├── publish.ts               # Maester (publish manifest) walkthrough
+│   │       ├── publish-agent.ts         # `publish apply|update|inventory|preview` + flag modes of `publish add|remove` (§6.19)
 │   │       ├── skill.ts                 # `maester skill <verb>` group (install/upgrade/add-target/status/runtime)
 │   │       ├── status.ts                # Status check CLI binding (read-only)
 │   │       └── sync.ts                  # Sync runner CLI binding
@@ -78,7 +80,7 @@ maester/
 │   │   ├── config/
 │   │   │   ├── loader.ts                # yaml.parse + zod.parse; structured errors
 │   │   │   ├── writer.ts                # Serialize to YAML; preserve comments on rewrite
-│   │   │   ├── edit.ts                  # Config editing engine: Document-level append/remove, re-validate, atomic write (§6.18)
+│   │   │   ├── edit.ts                  # Config editing engine: Document-level append/remove/update + create, re-validate, atomic write (§6.18, §6.19)
 │   │   │   └── paths.ts                 # Locate citadel.yaml / maester.yaml at repo root
 │   │   ├── connectors/                  # Traveling Maesters framework + per-type implementations
 │   │   │   ├── registry.ts              # Compile-time type registry; type-id -> ConnectorType
@@ -153,7 +155,8 @@ maester/
 │   │   │   ├── runner.ts                # Per-source orchestrator; returns StatusResult
 │   │   │   ├── probe.ts                 # ls-remote SHA + ephemeral sparse maester.yaml (git sources)
 │   │   │   └── local-probe.ts           # No-network probe for path sources: fingerprint, dangling links, manifest
-│   │   ├── skill/                       # Grand Maester agent skill installer + runtime helper
+│   │   ├── publisher/                   # AI-aided maester definition: change sets, inventory, sensitive guard, preview (§6.19)
+│   │   ├── skill/                       # Agent skill installer (kinds: grand-maester, publisher) + runtime helper
 │   │   │   ├── runner.ts                # install / upgrade / add-target orchestration
 │   │   │   ├── version.ts               # SKILL_VERSION constant + read-installed-version helper
 │   │   │   ├── managed-region.ts        # begin/end marker conventions per artifact format
@@ -172,7 +175,9 @@ maester/
 │   │   │       └── content/             # Raw .md fragments (bundled as text via tsup loader)
 │   │   │           ├── citadel-awareness.md
 │   │   │           ├── state-awareness.md
-│   │   │           └── freshness-awareness.md
+│   │   │           ├── freshness-awareness.md
+│   │   │           ├── publisher-workflow.md     # Publisher: create/refine workflow + hard rules (§6.19)
+│   │   │           └── publisher-vocabulary.md   # Publisher: slug rules, reuse-before-invent, state guidance
 │   │   └── errors.ts                    # Tagged error classes (ConfigError, AuthError, ...)
 │   ├── schemas/
 │   │   ├── citadel.ts                   # zod schema for citadel.yaml + inferred types
@@ -491,6 +496,18 @@ Written atomically as the last step of a successful per-source sync. Used by fut
 
 Introduced by: [Maester Configuration](features/maester-configuration.md). The `state` field is introduced by [Document State Tagging](features/document-state-tagging.md).
 
+#### ChangeSet (stdin / `--from` payload of `maester publish apply`, never persisted)
+
+| Field | Type | Constraints |
+|---|---|---|
+| `add` | `PublishedDocument[]` | Optional. Validated with `PublishedDocumentSchema`. Paths must not already exist (duplicate check runs on the merged result). |
+| `update` | `{ path: string; set?: Partial<Omit<PublishedDocument, "path">>; unset?: ("description" \| "category" \| "tags" \| "state")[] }[]` | Optional. `path` must equal an existing entry's `path` exactly. A key in both `set` and `unset` is rejected. |
+| `remove` | `string[]` | Optional. Each must equal an existing entry's `path`. Removing every entry of a non-empty list is refused. |
+| `acknowledgeNarrowing` | boolean | Required `true` when the before-state publishes the whole repository (no file, or `documents: []`) and the result lists documents. |
+| `allowSensitive` | boolean | Required `true` to add or update an entry that matches a sensitive pattern (§6.19). |
+
+`zod` schema `.strict()`; at least one of `add` / `update` / `remove` must be non-empty. Introduced by: [AI-Aided Maester Definition](features/ai-aided-maester-definition.md).
+
 #### Connector (item inside `CitadelConfig.connectors`)
 
 | Field | Type | Constraints |
@@ -708,12 +725,16 @@ See §6 → CLI Command Surface.
 | `maester init` | Run citadel initialization walkthrough directly, skipping the menu. |
 | `maester publish` | Run maester (publish manifest) walkthrough directly. |
 | `maester add` / `remove` / `list` | Config editing on citadel sources (§6.18). `add` reuses the init source prompts; `remove` picks one source by name; `list` prints a table plus the count and file path. Exit `0` ok, `1` declined, `2` missing/invalid config or refused edit, `130` Ctrl-C. |
-| `maester publish add` / `remove` / `list` | The same verbs on maester documents (§6.18). Bare `maester publish` still runs the walkthrough. |
+| `maester publish add` / `remove` / `list` | The same verbs on maester documents (§6.18). Bare `maester publish` still runs the walkthrough. With `--path`, `add` / `remove` run non-interactively through `applyChangeSet()` (§6.19). `list --json` prints every field of every entry plus `manifest: "none" \| "whole-repository" \| "listed"`. |
+| `maester publish apply [--create] [--dry-run] [--from <file>\|-]` | Applies a whole change set (`{ add, update, remove, acknowledgeNarrowing?, allowSensitive? }` JSON) in one validated, atomic edit. `--create` makes `maester.yaml` when absent. `--dry-run` writes nothing. Never prompts. `--json` → `{ ok, created, added, updated, removed, documents }` or `{ ok: false, error: { field, path, message } }`. Exit `0`, or `2` on invalid input / refused edit / missing file without `--create`. §6.19. |
+| `maester publish update --path <p> [--description …] [--category …] [--tags a,b] [--state canon\|draft] [--unset <field>]…` | Non-interactive in-place update of one entry (§6.19). Same exit codes as `apply`. |
+| `maester publish inventory [--all] [--limit n]` | Read-only. Lists candidate documents with their inline metadata, the entry covering each, the vocabulary in use, a directory rollup and likely-sensitive files. Never prints file contents. `--json` → one `InventoryReport`. §6.19. |
+| `maester publish preview [--from <file>\|-]` | P2, read-only. The files each entry, current or proposed, would publish, with effective state / category / tags; flags `empty-entry` and `multi-match`. §6.19. |
 | `maester sync [names...]` | Run sync. Optional positional names scope the run to a subset. |
 | `maester sync --json` | Sync, emitting one JSON object per line; prompt + spinner layers disabled. |
 | `maester status [names...]` | Read-only freshness check. Optional positional names scope the run to a subset. Exit codes: `0` (all up-to-date), `1` (≥ 1 behind, 0 failed), `2` (≥ 1 failed, or config/invocation error). |
 | `maester status --json` | Status, emitting one JSON object per source on stdout (NDJSON). Same exit-code ladder. |
-| `maester skill install` | Install the Grand Maester skill into the current citadel repo. Interactive multi-select of agent targets when no flags; non-interactive when `--target` is passed (`--target claude-code --target codex` etc.). |
+| `maester skill install` | `--skill <grand-maester\|publisher>` selects the skill kind (§6.19); `install` / `add-target` without it default to `grand-maester`, and `upgrade` / `status` cover every installed kind. Install the Grand Maester skill into the current citadel repo. Interactive multi-select of agent targets when no flags; non-interactive when `--target` is passed (`--target claude-code --target codex` etc.). |
 | `maester skill upgrade` | Refresh every installed target's managed-region content to match the running `maester` version. `--check` reports which targets are outdated and exits non-zero without writing. |
 | `maester skill add-target <id>` | Install an additional agent target alongside any already installed. |
 | `maester skill status` | List installed targets, their on-disk version markers, and whether each is up to date with `SKILL_VERSION`. |
@@ -724,6 +745,7 @@ See §6 → CLI Command Surface.
 | `maester connector remove <name>` | Deletes the named connector from `citadel.yaml` after a confirmation prompt and refreshes per-host MCP registrations. |
 | `maester connector list` | Prints the configured connectors with their resolved tool names and types. Human-readable; agents go through MCP. |
 | `maester connector refresh` | Re-validates `citadel.yaml` and re-runs `refreshMcpRegistrations(repoRoot)` against every installed Grand Maester target. Use after editing `citadel.yaml` by hand (the `add` / `remove` verbs of both `connector` and `mcp-server` already refresh automatically). This is the one generic refresh verb — it also refreshes forwarded env-var names and direct-mode server entries. `--dry-run` (Connector Env-Var Seeding P2) prints, per host, the env-var names and direct entries it would write, without writing. Exit code `0` on success, `2` when `citadel.yaml` is missing or invalid. |
+| `maester connector tools [--servers]` | Traveling Maesters P2 diagnostic: prints the tool list `maester mcp` would expose without starting an MCP session — connector tools, plus the two `citadel__*` linked-document tools when a link-mode destination exists. Proxied MCP servers are listed by name only unless `--servers` is passed, which starts them via `checkMcpServers()` (same path as `mcp-server check`, every child closed afterwards) and adds their `<server>__<tool>` tools. Direct servers are noted as host-managed. `--json` prints one `{ tools: [...] }` object in MCP `tools/list` shape. Exit `0`; `1` when `--servers` was passed and a server failed; `2` on a missing/invalid `citadel.yaml`. |
 | `maester mcp-server add` | Interactive registration of a third-party MCP server (name, kind, command + args or URL, description, env-var names / auth header, `proxy` / `direct`). Shows the full command or URL and asks for confirmation before saving. Writes `citadel.yaml`, runs `refreshMcpRegistrations()`, and reminds the user to restart their agent session. Exit `2` outside a citadel-bearing repo. §6.17. |
 | `maester mcp-server remove <name>` | Confirms, deletes the entry, refreshes every host registration (removing direct entries and now-unused forwarded env-var names), reminds the user to restart. |
 | `maester mcp-server list` | Table of name, kind, mode (`proxy` / `direct`), env-var names (and `auth.envVar`), allowlist size. Never prints env-var values. `--json` supported. |
@@ -2012,7 +2034,7 @@ All existing `refreshMcpRegistrations()` call sites pick up the seeding with no 
 
 §6.17 adds `mcp-server add` / `remove`.
 
-**P2 diagnostic (not yet built):** `maester connector refresh --dry-run` prints the per-host env set and direct entries without writing (Gap 73).
+**P2 diagnostic:** `maester connector refresh --dry-run` calls `planMcpRegistrations(repoRoot)` (`src/core/mcp/registrations/index.ts`), which runs the same `renderHost()` the real refresh uses against each installed host's current file, in memory. Per host it prints the forwarded names with who needs each one (`connector:<name>` / `mcp-server:<name>`, from `collectForwardedEnvVars().contributors`), names added by hand that a refresh keeps, direct entries written or removed, skipped direct servers, and whether the file would change. Cursor shows "no env forwarding" plus the names its shell must provide. `--json` emits one object per host (NDJSON). Writes nothing; exit `0`, or `2` on a config error or an unparseable host file (Gap 73).
 
 ### 6.17 Citadel MCP Servers (proxy + direct)
 
@@ -2191,6 +2213,156 @@ flowchart LR
 - **Missing config:** refuses with "run `maester init`" / "run `maester publish`".
 - **Menu (`src/cli/menu.ts`):** `topLevelMenuOptions(roles)` adds `Citadel: add source / remove source / list sources` and `Maester: add document / remove document / list documents` for each configured role, alongside the existing view, status and exit entries.
 - **Out of scope (per PRD):** editing an entry in place, flag-driven variants, and bootstrap side effects (skill install, `package.json` script, `.gitignore`), which stay with init/publish.
+
+### 6.19 AI-Aided Maester Definition (Publisher)
+
+[AI-Aided Maester Definition](features/ai-aided-maester-definition.md) lets the user's own coding agent propose a `maester.yaml`. The system **never calls a model**. It contributes three things:
+
+- an installable **Publisher** skill, which holds the workflow instructions;
+- read-only grounding commands (`publish list --json`, `publish inventory`, `publish preview`);
+- one validated, atomic write path (`publish apply`, plus per-entry flag verbs built on it).
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant A as Coding agent (Publisher skill)
+    participant CLI as maester publish …
+    participant CS as core/publisher/change-set.ts
+    participant E as core/config/edit.ts
+    U->>A: "set this repo up as a maester" / "review maester.yaml"
+    A->>CLI: publish list --json · publish inventory --json
+    CLI-->>A: entries, manifest mode, vocabulary, files, sensitive flags
+    A->>CLI: publish apply --dry-run --json  (draft change set on stdin)
+    CLI->>CS: parse + applyChangeSet(handle, set) in memory
+    CS-->>A: resulting documents or field-specific error
+    A->>U: proposal table: rationale, exclusions, narrowing notice, new vocabulary
+    U->>A: edits → approve
+    A->>CLI: publish apply --json  (approved change set)
+    CLI->>CS: applyChangeSet
+    CS->>E: updateEntry / appendEntry / removeEntry → commitEdit (atomic)
+    CLI-->>A: { ok, created, added, updated, removed, documents }
+    A->>U: resulting entries + "review with git diff"
+```
+
+#### Skill kinds (`src/core/skill/`, Gap 75 — user decision)
+
+- `SkillKind = "grand-maester" | "publisher"` is a new dimension in `src/core/skill/types.ts`.
+  - The target registry is keyed by `(kind, SkillTargetId)`.
+  - **`listSkillTargets(kind = "grand-maester")` keeps its current default**, so the MCP registration refresh (§6.11, §6.16) still iterates Grand Maester targets only. The Publisher needs no MCP entry and never triggers a refresh.
+  - Each kind has its own artifacts, managed-region markers and content fragments, and shares the per-format writers and `SKILL_VERSION`.
+
+| Target | Publisher artifact |
+|---|---|
+| `claude-code` | `.claude/skills/maester-publisher/SKILL.md`. Frontmatter `description` triggers on publishing, maester.yaml and "what should this repo share" requests. **No hooks.** |
+| `codex` / `agents-md` | A second managed region in `AGENTS.md`, `<!-- maester:publisher:begin v=<SKILL_VERSION> -->` … `<!-- maester:publisher:end -->`, independent of the Grand Maester region. |
+| `cursor` | `.cursor/rules/maester-publisher.mdc` with `alwaysApply: false` and a trigger description. |
+
+- **`managed-region.ts`** takes the marker name (`skill` or `publisher`) as a parameter. Upgrading one region never touches the other.
+- **Gating:**
+  - `grand-maester` still requires `citadel.yaml`.
+  - `publisher` requires only a repository root, since create mode runs before `maester.yaml` exists.
+- **Content** lives in `templates/content/`:
+  - `publisher-workflow.md`: create and refine modes, the proposal format, the dry-run-before-proposing rule, and the two hard rules: *never hand-edit `maester.yaml`* and *never edit document content*.
+  - `publisher-vocabulary.md`: slug rules, reuse-before-invent, the canon / draft / "file header" guidance, and labelling new values.
+- **CLI:**
+  - `maester skill install|upgrade|add-target|status` gain `--skill <grand-maester|publisher>`.
+  - Without `--skill`:
+    - non-interactive `install` / `add-target` default to `grand-maester` (backward compatible);
+    - interactive `install` multi-selects the skills the repository is eligible for;
+    - `upgrade` / `status` cover every installed kind.
+  - Status rows become `(kind, target)`.
+- **Walkthrough offer:** `maester publish` ends with "Install the Publisher agent skill?" (*default No*). Accepting runs the same `runSkillInstall(repoRoot, { kind: "publisher", targets })` (Gap 83).
+
+#### Change set (`src/core/publisher/change-set.ts`, Gaps 76–78)
+
+- **Every write path goes through `applyChangeSet()`.** `publish apply` sends the whole approved proposal. The flag verbs build a one-item change set:
+  - `publish add --path …`
+  - `publish update --path …`
+  - `publish remove --path …`
+- `applyChangeSet(handle, set, options)` works on the `EditHandle` from `openConfigForEdit()` (§6.18). With `--create` and no file present, it uses a new `createConfigForEdit(repoRoot, "maester")` instead.
+- Apply order is **remove, then update, then add**.
+- Entries are keyed by **exact `path` string equality**. An unknown path in `update` or `remove` fails with `{ field: "path", path }`.
+- After applying, the full document is re-validated with `MaesterConfigSchema`. Any failure leaves the file unchanged.
+- **Guards:**
+  - **Narrowing:** if the before-state publishes the whole repository (no file, or `documents: []`) and the result lists documents, the set must carry `acknowledgeNarrowing: true` (`--acknowledge-narrowing` on the flag verbs).
+  - **Last entry:** removing every entry from a non-empty list is refused, as in §6.18.
+  - **Sensitive paths:** an added or updated `path` that matches a sensitive pattern, or a glob that resolves to sensitive files in the working tree, is refused unless the set carries `allowSensitive: true` (Gap 80).
+- **`--dry-run`** runs everything in memory and prints the result without writing. The Publisher validates its draft this way *before* showing it to the user.
+- **Flag verbs and `apply` never prompt.** The confirmation happens in the agent conversation; the version-control diff is the final review. Bare `publish add|remove` without flags keep the interactive §6.18 behavior.
+
+#### Edit-engine additions (`src/core/config/edit.ts`)
+
+- **`updateEntry(handle, index, set, unset)`** mutates the entry's `YAMLMap` node in place: `node.set(key, value)` and `node.delete(key)`. The entry's comments and key order survive.
+  - `unset` clears `description`, `category`, `tags` or `state`. Clearing `state` means "file header".
+- **`createConfigForEdit(repoRoot, "maester")`** seeds a `Document` with the `MAESTER_HEADER` comment from `writer.ts`, `schemaVersion: 1` and an empty `documents` block list. The first `commitEdit()` creates the file atomically.
+
+#### Inventory (`src/core/publisher/inventory.ts`, Gap 79)
+
+- **File discovery:**
+  - In a git work tree: `git ls-files --cached --others --exclude-standard -z`, which honours `.gitignore` and skips untracked noise.
+  - Otherwise: the same filesystem walk as path sources.
+  - Then `filterWholeRepoFiles()` (§6.13) applies the built-in excludes, binary sniffing and the 1 MiB cap.
+- **Kinds:**
+
+  | Kind | Files |
+  |---|---|
+  | `doc` | `.md` `.mdx` `.markdown` `.rst` `.adoc` `.txt` `.html` `.htm` |
+  | `data` | `.yaml` `.yml` `.json` `.toml` |
+  | `other` | everything else |
+
+  The default output lists `doc` files only; `--all` lists every non-excluded file.
+- **Inline metadata** is read with `handlerFor(file)` from `core/state/format.ts`. Only `state`, `category` and `tags` are emitted, *never content*.
+- **`coveredBy`** names the first manifest entry whose path matches, using the same picomatch options as manifest resolution at sync time.
+- **Output (`--json`)** is one object:
+
+  ```ts
+  type InventoryReport = {
+    manifest: "none" | "whole-repository" | "listed";
+    vocabulary: { categories: Record<string, number>; tags: Record<string, number> }; // manifest ∪ inline
+    directories: { dir: string; docFiles: number; uncovered: number }[];              // always complete
+    files: { path: string; bytes: number; kind: "doc" | "data" | "other";
+             inline: { state?: string; category?: string; tags?: string[] };
+             coveredBy: string | null }[];                                              // capped by --limit (default 2000)
+    sensitive: { path: string; reason: string }[];                                      // always complete, any kind
+    truncated: boolean;
+  };
+  ```
+
+  The human output is a directory rollup plus the sensitive list.
+- **Exit codes:** `0`, or `2` outside a repository.
+
+#### Sensitive patterns (`src/core/publisher/sensitive.ts`, Gap 80)
+
+- **Matched by path only; file contents are never read.** The patterns are:
+  - `.env` and `.env.*`, except the `.example`, `.sample` and `.template` variants;
+  - `*.pem` `*.key` `*.p12` `*.pfx` `*.kdbx`;
+  - `id_rsa*` `id_ecdsa*` `id_ed25519*`;
+  - `.npmrc` `.pypirc` `.netrc`;
+  - `**/.aws/**` `**/.ssh/**` `**/secrets/**`;
+  - `credentials*` `*.tfstate*`.
+- Inventory and the apply guard share this one list.
+
+#### Preview (`src/core/publisher/preview.ts`, P2, Gap 82)
+
+- **Command:** `maester publish preview [--from <file>|-]`.
+- **Input:** the current manifest, or the result of applying a change set in memory.
+- **Resolution:** files are resolved with the same manifest-driven matcher `local-source.ts` uses, extracted as `resolveManifestFiles(root, documents)`. Each file's effective fields come from a pure `resolveFileMetadata(file, rules)` extracted from `core/state/applier.ts`, so the preview matches sync exactly.
+- **Output per entry:** the files it matches, each with effective `state` / `category` / `tags` and their source of truth (`inline` / `rule` / `unset`). Entries that match nothing are flagged `empty-entry`; files matched by more than one entry are flagged `multi-match`.
+- **Whole-repository manifest:** the preview shows per-directory counts only.
+- **Writes nothing.** `--json` prints one object.
+
+#### Module placement
+
+```
+src/core/publisher/
+├── change-set.ts      # ChangeSetSchema (zod, .strict()) + applyChangeSet(); guards
+├── inventory.ts       # runInventory(repoRoot, { all, limit }) → InventoryReport
+├── sensitive.ts       # SENSITIVE_PATTERNS + matchSensitive(path)
+└── preview.ts         # runPreview(repoRoot, documents) (P2)
+src/cli/commands/publish-agent.ts   # publish apply | update | inventory | preview, and the flag modes of publish add | remove
+```
+
+`edit.ts` (§6.18) keeps the interactive verbs. When `--path` is present, it hands off to the flag modes in `publish-agent.ts`.
 
 ---
 
@@ -3488,6 +3660,102 @@ It writes nothing and exits `0`, or `2` on a config error. It covers proxied MCP
 
 Both PRDs were amended to match. See §6.13.
 
+#### Gap 75 — Publisher packaging (user decision)
+
+**What's missing.** The PRD asks for a Publisher installable through the existing skill mechanism. The skill system knew only one skill, and only installed it in citadel repositories.
+
+**Resolution (user-chosen: a second skill kind).**
+
+- `SkillKind = "grand-maester" | "publisher"`. Each kind has its own artifacts and managed-region markers, and shares the writers and `SKILL_VERSION`.
+- The Publisher installs in any repository root.
+- `--skill` selects the kind; it defaults to `grand-maester` for backward compatibility.
+- `listSkillTargets()` keeps returning Grand Maester targets, so MCP registration is unaffected.
+
+See §6.19.
+
+#### Gap 76 — Agent write path (user decision)
+
+**What's missing.** The PRD lists per-entry non-interactive verbs. A proposal of N entries written as N calls can fail halfway and leave a partly applied proposal.
+
+**Resolution (user-chosen: both).**
+
+- `maester publish apply` takes the whole change set and applies it in one validated, atomic edit. The Publisher always uses `apply`.
+- The per-entry flag verbs (`add`, `update` and `remove` with `--path`) build a one-item change set through the same `applyChangeSet()`, so there is one validation path.
+
+#### Gap 77 — Change-set semantics
+
+**What's missing.** The PRD does not specify ordering, entry identity, or how a field is cleared.
+
+**Resolution.**
+
+- Apply order is remove → update → add.
+- Entries are identified by exact `path` string.
+- `update.unset` clears a field; clearing `state` means "file header".
+- Unknown paths fail with a field-specific error.
+- `--dry-run` validates without writing; the Publisher must dry-run before presenting a proposal.
+- Flag verbs and `apply` never prompt, because confirmation happens in the agent conversation.
+
+#### Gap 78 — Create mode and the narrowing acknowledgement
+
+**What's missing.**
+
+- `publish add` refuses when `maester.yaml` is missing.
+- The PRD requires an acknowledgement when adding to a whole-repository manifest, but a repository with **no** manifest is also whole-repository to consuming citadels (§6.13).
+
+**Resolution.**
+
+- `apply --create` seeds the file through `createConfigForEdit()`. Without `--create`, a missing file exits `2`.
+- `acknowledgeNarrowing` is required whenever the before-state publishes the whole repository, whether the file is missing or `documents: []`.
+- Writing an empty manifest stays a deliberate human action in the walkthrough.
+
+#### Gap 79 — Inventory discovery, scope and size
+
+**What's missing.** The PRD does not define what "documentation-like" means, how the tree is walked, or how output is bounded in large repositories.
+
+**Resolution.**
+
+- **Walk:** `git ls-files --cached --others --exclude-standard` in a git work tree (honours `.gitignore`), otherwise a filesystem walk. Built-in excludes apply.
+- **Kinds:** `doc`, `data` or `other` by extension; `doc` only by default, `--all` for everything.
+- **Inline metadata only, never content.**
+- **Size:** files are capped by `--limit` (default 2000) with `truncated: true`. The directory rollup and the sensitive list are always complete, so the agent can still propose globs.
+
+#### Gap 80 — Sensitive-file guard
+
+**What's missing.** The PRD flags sensitive files in the inventory, but does not say whether the write path enforces anything.
+
+**Resolution.**
+
+- One path-only pattern list in `sensitive.ts` is shared by the inventory and `applyChangeSet()`.
+- Adding or updating an entry that matches a sensitive path, or whose glob resolves to sensitive files in the working tree, is refused unless the set carries `allowSensitive: true`.
+- Contents are never read.
+
+#### Gap 81 — Vocabulary sources
+
+**What's missing.** Which values count as "already in use".
+
+**Resolution.**
+
+- The union of manifest `category` / `tags` and inline values in inventoried files, with usage counts, is exposed as `InventoryReport.vocabulary`.
+- The Publisher content requires reusing an existing value over a near-synonym, and marking every new value `(new)` in the proposal.
+
+#### Gap 82 — Preview resolution parity
+
+**What's missing.** A preview that drifts from sync would mislead both the agent and the user.
+
+**Resolution.**
+
+- Extract `resolveManifestFiles()` from `local-source.ts` and a pure `resolveFileMetadata()` from `core/state/applier.ts`. Sync and preview call the same functions.
+- Preview resolves against the working tree, so uncommitted files count. It never writes.
+
+#### Gap 83 — Walkthrough offer default
+
+**What's missing.** The PRD says the Publisher is offered at the end of the maester walkthrough, but not whether the offer defaults to yes.
+
+**Resolution.**
+
+- *Default No.* The walkthrough has just produced a manifest by hand, and many repositories have no agent.
+- The offer appears only on the success path. Accepting runs `runSkillInstall({ kind: "publisher" })` with the same multi-select target picker.
+
 ### Assumptions
 
 - **One repository, one role each.** A repo has at most one `citadel.yaml` and at most one `maester.yaml`. Both can coexist (as confirmed by [Maester Configuration P1](features/maester-configuration.md)); the schemas and tooling assume single-instance per role per repo.
@@ -3505,6 +3773,7 @@ Both PRDs were amended to match. See §6.13.
 - **Upstream MCP servers speak the current protocol over stdio or Streamable HTTP.** SSE-only servers fail with `protocol-error` / `connection-refused` and must be run in direct mode or upgraded.
 - **Direct-mode host config keys are verified at implementation time.** The shapes in §6.17 reflect current Claude Code, Codex CLI, and Cursor documentation; `HOST_CAPABILITIES` in `registrations/direct.ts` is the single place to correct them.
 - **Config Editing reuses the registration sub-flows.** [Config Editing](features/config-editing.md) (§6.18) calls the exported `promptSourceEntry()` (§6.14) and `collectOneDocument()` rather than duplicating them, so every init/publish validator applies to `add`.
+- **The Publisher's reasoning lives entirely in the host agent.** Correctness comes from `applyChangeSet()` validation and the version-control diff, not from model behavior. The tool makes no model or network calls for [AI-Aided Maester Definition](features/ai-aided-maester-definition.md) (§6.19).
 - **No live config reload while `maester mcp` is running.** The server reads `citadel.yaml` once at startup. Mid-session connector mutations require the host platform to restart the MCP server (which most do automatically when their MCP config file changes). Live reload is a deferred capability tracked in [traveling-maesters.md](features/traveling-maesters.md).
 
 ---
