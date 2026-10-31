@@ -41,6 +41,21 @@ In a directory that *publishes* docs to other citadels:
 npx baller-maester publish      # maester manifest walkthrough — creates ./maester.yaml
 ```
 
+## Editing your config
+
+Once `citadel.yaml` or `maester.yaml` exists, change it with the same prompts that created it instead of hand-editing YAML:
+
+| Citadel (`citadel.yaml`) | Maester (`maester.yaml`) |
+|---|---|
+| `maester add` — add a source | `maester publish add` — add a document |
+| `maester remove` — pick a source to remove | `maester publish remove` — pick a document to remove |
+| `maester list` — table of sources | `maester publish list` — table of documents |
+
+- The same verbs appear in the `npx baller-maester` menu once a config exists.
+- Writes are atomic and keep your comments, key order and every entry you didn't touch.
+- `remove` won't delete the last entry: a citadel needs one source, and an empty `documents` list would publish the whole repository.
+- Removing a source leaves its synced folder on disk; delete it yourself if you no longer need it.
+
 ## Pulling from sources you don't own
 
 Every entry in `citadel.yaml` is a **source** — a remote git repo. Each source resolves to one of three modes, checked in this order:

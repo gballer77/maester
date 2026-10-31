@@ -42,6 +42,7 @@ This is a single-package, ESM-only Node.js library that ships a CLI binary. Ther
 | [Document Category and Tags](features/document-category-and-tags.md) | Generalizes the `src/core/state/` cluster from one field to an `InlineMetadata { state, category, tags }` record: every format module reads/writes all three; `applier.ts` resolves each field independently (inline > rule > default/unset). `IncludeEntry` gains `category` + `tags`. `SyncOutcome` gains a category breakdown and tag roll-up. See §6.15. |
 | [Connector Env-Var Seeding](features/connector-env-seeding.md) | `src/core/mcp/registrations/env-vars.ts` collects the forwarded env-var set; the Claude Code and Codex writers merge it into their `maester` entry with a managed-name ledger (`_maesterManagedEnv` / `_maester_managed_env_vars`) so user-added names survive refresh; the Cursor Grand Maester target lists the names in its artifact. Rides on the existing `refreshMcpRegistrations()` triggers. See §6.16. |
 | [Citadel MCP Servers](features/citadel-mcp-servers.md) | `CitadelConfig.mcpServers` in `src/schemas/citadel.ts`. New `src/core/mcp/proxy/` cluster (`upstream.ts` — SDK `Client` over stdio or Streamable HTTP; `pool.ts` — concurrent bounded startup, tool aggregation, call forwarding, shutdown; `tool-name.ts`; `reasons.ts`). `src/core/mcp/server.ts` merges proxied tools into `tools/list`. Direct-mode host entries rendered by new `src/core/mcp/registrations/direct.ts`. New `maester mcp-server <add\|remove\|list\|check>` in `src/cli/commands/mcp-server.ts`; init gains an optional step after connectors. See §6.17. |
+| [Config Editing](features/config-editing.md) | `src/cli/commands/edit.ts` (`maester add\|remove\|list` on sources; `maester publish add\|remove\|list` on documents) over a comment-preserving, atomic edit engine in `src/core/config/edit.ts`. Reuses `promptSourceEntry()` (init) and `collectOneDocument()` (`src/cli/commands/document-prompt.ts`). The top-level menu gains the six verbs for configured roles. See §6.18. |
 
 ---
 
@@ -64,6 +65,8 @@ maester/
 │   │   ├── menu.ts                      # `npx baller-maester` interactive top-level menu
 │   │   └── commands/
 │   │       ├── connector.ts             # `maester connector <add|remove|list|exec>` (mgmt + fallback dispatch via `exec <name> <op>`)
+│   │       ├── document-prompt.ts       # Per-document prompts shared by `publish` and `publish add`
+│   │       ├── edit.ts                  # Config editing: `maester add|remove|list` + `maester publish add|remove|list` (§6.18)
 │   │       ├── init.ts                  # Citadel initialization walkthrough
 │   │       ├── mcp.ts                   # `maester mcp` — runs the stdio MCP server in cwd
 │   │       ├── mcp-server.ts            # `maester mcp-server <add|remove|list|check>` (third-party MCP servers — §6.17)
@@ -75,6 +78,7 @@ maester/
 │   │   ├── config/
 │   │   │   ├── loader.ts                # yaml.parse + zod.parse; structured errors
 │   │   │   ├── writer.ts                # Serialize to YAML; preserve comments on rewrite
+│   │   │   ├── edit.ts                  # Config editing engine: Document-level append/remove, re-validate, atomic write (§6.18)
 │   │   │   └── paths.ts                 # Locate citadel.yaml / maester.yaml at repo root
 │   │   ├── connectors/                  # Traveling Maesters framework + per-type implementations
 │   │   │   ├── registry.ts              # Compile-time type registry; type-id -> ConnectorType
@@ -703,6 +707,8 @@ See §6 → CLI Command Surface.
 | `maester` (no args, non-TTY) | Print `--help` text and exit 0. |
 | `maester init` | Run citadel initialization walkthrough directly, skipping the menu. |
 | `maester publish` | Run maester (publish manifest) walkthrough directly. |
+| `maester add` / `remove` / `list` | Config editing on citadel sources (§6.18). `add` reuses the init source prompts; `remove` picks one source by name; `list` prints a table plus the count and file path. Exit `0` ok, `1` declined, `2` missing/invalid config or refused edit, `130` Ctrl-C. |
+| `maester publish add` / `remove` / `list` | The same verbs on maester documents (§6.18). Bare `maester publish` still runs the walkthrough. |
 | `maester sync [names...]` | Run sync. Optional positional names scope the run to a subset. |
 | `maester sync --json` | Sync, emitting one JSON object per line; prompt + spinner layers disabled. |
 | `maester status [names...]` | Read-only freshness check. Optional positional names scope the run to a subset. Exit codes: `0` (all up-to-date), `1` (≥ 1 behind, 0 failed), `2` (≥ 1 failed, or config/invocation error). |
@@ -2150,6 +2156,42 @@ There is no enumeration of servers or tools.
 
 The Cursor env-var note (§6.16) now lists the forwarded union.
 
+### 6.18 Config Editing (as built)
+
+[Config Editing](features/config-editing.md) adds `add` / `remove` / `list` for both roles.
+
+```mermaid
+flowchart LR
+    V["maester add · remove · list<br/>maester publish add · remove · list<br/>(or the menu)"] --> O["openConfigForEdit()<br/>parseDocument + validate"]
+    O --> P["prompts reused from init / publish"]
+    P --> E["appendEntry() / removeEntry()<br/>on the YAML Document"]
+    E --> C["commitEdit()<br/>re-validate → temp file → fsync → rename"]
+```
+
+#### Edit engine (`src/core/config/edit.ts`)
+
+- **Edits the parsed `yaml` Document**, never a re-serialized object. Comments, key order, `schemaVersion`, `baseDir` and untouched entries survive byte-for-byte outside the changed entry. Flow collections are written without inner padding (`[a, b]`), so the common hand-written style round-trips (P2 is best-effort).
+- **`documents: []`** (a flow sequence) grows as a block list; an omitted `documents` key is created.
+- **Unknown top-level keys** are warned about by name, excluded from the strict schema check, and written back untouched.
+- **Every edit is fully re-validated** against `CitadelConfigSchema` / `MaesterConfigSchema` before writing, so duplicate names, destination collisions and path-overlap guards apply exactly as at load time.
+- **Atomic write:** a sibling `.<file>.<pid>.<hex>.tmp` is written, fsynced and renamed over the target. Any failure removes the temp file, keeps the original, and reports the file path.
+
+#### Verbs (`src/cli/commands/edit.ts`)
+
+| Verb | Behavior |
+|---|---|
+| `add` (sources) | `promptSourceEntry()` with existing names reserved → `detectDestinationCollisions()` → confirm → commit. Ends with "run `maester sync`". |
+| `remove` (sources) | Select by name (URL/path + ref as hint) → restate name, location, description → confirm (default No) → commit. Notes that an existing synced destination is not cleaned up. Refuses the last source (schema requires ≥ 1). |
+| `list` (sources) | Table: name, URL or path, ref (`default branch`), auth type, destination (`(default)` marked), tags; then count and absolute file path. |
+| `publish add` | `collectOneDocument()` (duplicate-path rejection, path validators, file-exists soft warning). On a whole-repository manifest, warns that publishing narrows to the listed documents. |
+| `publish remove` | Select by path (category · state as hint) → restate → confirm → commit. **Refuses the last document**: an empty `documents` list publishes the whole repository, so removing it would silently widen what is published. Hand-edit the file to opt into that. |
+| `publish list` | Table: path, category, state (`file header` when unset), description, tags; then count and path. A whole-repository manifest prints that instead. |
+
+- **Exit codes:** `0` success; `1` the user declined a confirmation; `2` missing/invalid config or a refused edit; `130` Ctrl-C.
+- **Missing config:** refuses with "run `maester init`" / "run `maester publish`".
+- **Menu (`src/cli/menu.ts`):** `topLevelMenuOptions(roles)` adds `Citadel: add source / remove source / list sources` and `Maester: add document / remove document / list documents` for each configured role, alongside the existing view, status and exit entries.
+- **Out of scope (per PRD):** editing an entry in place, flag-driven variants, and bootstrap side effects (skill install, `package.json` script, `.gitignore`), which stay with init/publish.
+
 ---
 
 ## 7. Authentication & Authorization Architecture
@@ -3462,7 +3504,7 @@ Both PRDs were amended to match. See §6.13.
 - **Agent hosts follow in-repo symlinks.** Hosts that refuse are served by the P2 `citadel__*_linked_document(s)` tools.
 - **Upstream MCP servers speak the current protocol over stdio or Streamable HTTP.** SSE-only servers fail with `protocol-error` / `connection-refused` and must be run in direct mode or upgraded.
 - **Direct-mode host config keys are verified at implementation time.** The shapes in §6.17 reflect current Claude Code, Codex CLI, and Cursor documentation; `HOST_CAPABILITIES` in `registrations/direct.ts` is the single place to correct them.
-- **Config Editing is not designed in this pass.** [Config Editing](features/config-editing.md) is unbuilt and has no section here. This pass only fixes the seam it needs — the exported `promptSourceEntry()` sub-flow (§6.14) — so the local-directory option lands in both registration flows without duplication.
+- **Config Editing reuses the registration sub-flows.** [Config Editing](features/config-editing.md) (§6.18) calls the exported `promptSourceEntry()` (§6.14) and `collectOneDocument()` rather than duplicating them, so every init/publish validator applies to `add`.
 - **No live config reload while `maester mcp` is running.** The server reads `citadel.yaml` once at startup. Mid-session connector mutations require the host platform to restart the MCP server (which most do automatically when their MCP config file changes). Live reload is a deferred capability tracked in [traveling-maesters.md](features/traveling-maesters.md).
 
 ---

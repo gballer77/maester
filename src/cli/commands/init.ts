@@ -47,9 +47,7 @@ export async function runInit(ctx: CliContext): Promise<number> {
     ctx.prompts.intro("Citadel already initialized");
     ctx.prompts.log.info(`A citadel config already exists at ${ctx.repoRoot.path}/citadel.yaml.`);
     ctx.prompts.log.message("Re-running this flow will not overwrite the existing file.");
-    ctx.prompts.log.message(
-      "To edit the citadel, open citadel.yaml directly (edit verbs coming in a later release).",
-    );
+    ctx.prompts.log.message("To edit it, run `maester add`, `maester remove`, or `maester list`.");
     ctx.prompts.outro("Nothing changed.");
     return 0;
   }

@@ -56,59 +56,59 @@ spec-version: v1
 
 ## 4. Capabilities
 
-- [ ] **P0**: User can add a new source to an existing citadel via wizard
+- [x] **P0**: User can add a new source to an existing citadel via wizard
   - Running `maester add` (or selecting the menu equivalent) opens the same source-registration prompts used by [Citadel Initialization](citadel-initialization.md), capturing one source at a time
   - Every validator that applied during init applies here (unique name against existing sources, well-formed URL, valid `includes` entries with per-entry state choice, env-var-name heuristic for token auth, destination collision against all existing sources)
   - On confirmation, the new entry is appended to `citadel.yaml`; on cancellation or validation rejection, the file on disk is unchanged
   - If no `citadel.yaml` exists at the cwd, the verb refuses with a clear message pointing the user to `maester init`
 
-- [ ] **P0**: User can add a new published document to an existing maester via wizard
+- [x] **P0**: User can add a new published document to an existing maester via wizard
   - Running `maester publish add` (or selecting the menu equivalent) opens the same document-registration prompts used by [Maester Configuration](maester-configuration.md)
   - Path-shape validators and the optional file-existence soft warning apply identically to init
   - Adding a path that already appears in the manifest is rejected with reference to the existing entry
   - On confirmation, the new entry is appended to `maester.yaml`; on cancellation, the file on disk is unchanged
   - If no `maester.yaml` exists at the cwd, the verb refuses with a clear message pointing the user to `maester publish`
 
-- [ ] **P0**: User can remove an entry from either config via guided selection
+- [x] **P0**: User can remove an entry from either config via guided selection
   - Running `maester remove` shows the current sources by name (with URL and ref as a hint) and lets the user pick exactly one
   - Running `maester publish remove` shows the current documents by path (with category and state as a hint) and lets the user pick exactly one
   - The confirmation prompt restates the entry being removed (full name/path plus any description) before any write occurs
   - On cancellation at any point, the file on disk is unchanged
 
-- [ ] **P0**: User can list current entries in either config without opening the file
+- [x] **P0**: User can list current entries in either config without opening the file
   - Running `maester list` renders every source with name, URL, ref (or "default branch"), auth type, destination (default or override), and any tags
   - Running `maester publish list` renders every document with path, category, state, description, and any tags
   - When the relevant config file does not exist, the verb prints a clear "no config found" message pointing to the right init/publish verb and exits non-zero
   - Output is styled through the shared CLI styling layer
 
-- [ ] **P0**: Edit verbs preserve schema version and unrelated top-level fields
+- [x] **P0**: Edit verbs preserve schema version and unrelated top-level fields
   - File writes preserve the existing `schemaVersion` value verbatim
   - File writes preserve any top-level field the verb does not touch (e.g. `baseDir` on the citadel) without modification
   - Existing entries that are not being added or removed are written back with their fields and ordering intact
   - The wizard surfaces a warning when it encounters an unrecognized top-level field rather than dropping it
 
-- [ ] **P0**: Top-level menu in an already-configured repo surfaces edit verbs
+- [x] **P0**: Top-level menu in an already-configured repo surfaces edit verbs
   - When `npx baller-maester` runs in a repo with `citadel.yaml`, the menu offers Add Source / Remove Source / List Sources entries for that role
   - When `npx baller-maester` runs in a repo with `maester.yaml`, the menu offers Add Document / Remove Document / List Documents entries for that role
   - When both roles are configured, the menu groups verbs by role with clear labels and offers all six
   - Existing "already configured" landing options (view path, exit) remain available alongside the edit verbs
 
-- [ ] **P1**: Edit verbs are atomic against the file
+- [x] **P1**: Edit verbs are atomic against the file
   - The config file is rewritten in a single atomic operation (write to a temporary file, then rename over the target)
   - A crash, cancellation, or write error mid-wizard never produces a half-written or corrupted YAML file
   - On unexpected error during the write, the original file is preserved on disk and the error is reported to the user with the file path
 
-- [ ] **P1**: Edit verbs produce clear next-step guidance after success
+- [x] **P1**: Edit verbs produce clear next-step guidance after success
   - After `add`: confirms what was appended (name or path) and points to next steps (e.g. "run `maester sync` to pull the new source")
   - After `remove`: confirms what was removed; when the removed source had a synced destination directory, notes that the on-disk output is not cleaned up automatically
   - After `list`: prints the total entry count and the absolute path of the file
   - Exit code is zero on success and non-zero on user cancellation or error
 
-- [ ] **P1**: Remove refuses to leave the config with zero entries
-  - The user cannot remove the last entry from either file via the wizard, because the schema requires at least one
-  - When the user attempts to remove the last entry, the verb surfaces a clear message explaining the constraint and suggests either adding a new entry first or deleting the file manually for a full reset
+- [x] **P1**: Remove refuses to leave the config with zero entries
+  - The user cannot remove the last entry from either file via the wizard: a citadel requires at least one source, and an empty maester `documents` list means "publish the whole repository", which the wizard must not switch on silently
+  - When the user attempts to remove the last entry, the verb surfaces a clear message explaining the constraint and suggests either adding a new entry first or editing / deleting the file manually
 
-- [ ] **P2**: Comments and key ordering in the existing config are preserved on write where possible
+- [x] **P2**: Comments and key ordering in the existing config are preserved on write where possible
   - Best-effort preservation of human-authored comments and existing key ordering in the file
   - If the underlying YAML serializer cannot preserve a given comment or ordering detail, the loss is silent rather than an error
   - The schema/version marker is always preserved regardless of serializer capability

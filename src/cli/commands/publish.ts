@@ -1,56 +1,30 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Command } from "commander";
-import { globby } from "globby";
 import { detectRoles } from "../../core/config/paths.js";
 import { detectDuplicatePaths, finalizeMaesterManifest } from "../../core/publish/finalize.js";
-import {
-  isGlobPath,
-  parseTags,
-  validateCategory,
-  validateDocumentPath,
-  validateTags,
-} from "../../core/publish/validators.js";
-import type { State } from "../../core/state/schema.js";
 import type { PublishedDocument } from "../../schemas/maester.js";
 import { PromptCancelledError } from "../../ui/prompts.js";
 import type { CliContext } from "../context.js";
+import {
+  askDocumentState,
+  buildPublishedDocumentStateField,
+  collectOneDocument,
+} from "./document-prompt.js";
+import { registerPublishEdit } from "./edit.js";
 
-type PublishedDocumentStateChoice = "draft" | "canon" | "file-header";
-
-export function buildPublishedDocumentStateField(
-  choice: PublishedDocumentStateChoice,
-): { state: State } | Record<string, never> {
-  if (choice === "file-header") return {};
-  return { state: choice };
-}
-
-async function askDocumentState(
-  ctx: CliContext,
-  path: string,
-): Promise<PublishedDocumentStateChoice> {
-  return ctx.prompts.select<PublishedDocumentStateChoice>({
-    message: `State for '${path}'?`,
-    initialValue: "file-header",
-    options: [
-      { value: "draft", label: "draft", hint: "tag this entry as draft" },
-      { value: "canon", label: "canon", hint: "tag this entry as canon" },
-      {
-        value: "file-header",
-        label: "file header",
-        hint: "no rule; defer to inline state in the file",
-      },
-    ],
-  });
-}
+export { buildPublishedDocumentStateField };
 
 export function registerPublish(program: Command, getContext: () => CliContext): void {
-  program
+  const publish = program
     .command("publish")
-    .description("Configure this repository as a maester (walkthrough).")
+    .description(
+      "Configure this repository as a maester (walkthrough). Use `publish add | remove | list` to edit an existing manifest.",
+    )
     .action(async () => {
       await runPublish(getContext());
     });
+  registerPublishEdit(publish, getContext);
 }
 
 export async function runPublish(ctx: CliContext): Promise<number> {
@@ -60,6 +34,9 @@ export async function runPublish(ctx: CliContext): Promise<number> {
     ctx.prompts.intro("Maester manifest already configured");
     ctx.prompts.log.info(`A maester.yaml already exists at ${ctx.repoRoot.path}/maester.yaml.`);
     ctx.prompts.log.message("Re-running this flow will not overwrite the existing file.");
+    ctx.prompts.log.message(
+      "To edit it, run `maester publish add`, `maester publish remove`, or `maester publish list`.",
+    );
     ctx.prompts.outro("Nothing changed.");
     return 0;
   }
@@ -141,70 +118,4 @@ export async function runPublish(ctx: CliContext): Promise<number> {
   );
   ctx.prompts.outro("Consuming citadels will pick up this manifest at their next `maester sync`.");
   return 0;
-}
-
-async function collectOneDocument(
-  ctx: CliContext,
-  repoRoot: string,
-  existing: readonly PublishedDocument[],
-): Promise<PublishedDocument> {
-  const path = await ctx.prompts.text({
-    message: "Path or glob (relative to the repo root)",
-    placeholder: "docs/runbooks/**/*.md",
-    validate: (value) => {
-      const trimmed = value.trim();
-      const result = validateDocumentPath(trimmed);
-      if (!result.ok) return result.reason;
-      if (existing.some((d) => d.path === trimmed)) {
-        return `Path '${trimmed}' is already declared in this manifest.`;
-      }
-      return undefined;
-    },
-  });
-  const trimmed = path.trim();
-
-  if (isGlobPath(trimmed)) {
-    const matches = await globby(trimmed, { cwd: repoRoot, dot: false, gitignore: false });
-    ctx.prompts.log.info(`Glob matches ${matches.length} file(s) currently.`);
-  } else {
-    if (!existsSync(resolve(repoRoot, trimmed))) {
-      ctx.prompts.log.warning(`'${trimmed}' does not yet exist in this repo. Saving anyway.`);
-    }
-  }
-
-  const stateChoice = await askDocumentState(ctx, trimmed);
-
-  const description = await ctx.prompts.text({
-    message: "Description (optional)",
-    placeholder: "",
-  });
-  const category = await ctx.prompts.text({
-    message: "Category slug (optional, e.g. 'readme', 'adr', 'runbook')",
-    placeholder: "",
-    validate: (value) => {
-      const result = validateCategory(value.trim());
-      return result.ok ? undefined : result.reason;
-    },
-  });
-  const tagsRaw = await ctx.prompts.text({
-    message: "Tags (comma-separated, optional)",
-    placeholder: "",
-    validate: (value) => {
-      const result = validateTags(value.trim());
-      return result.ok ? undefined : result.reason;
-    },
-  });
-
-  const trimmedDesc = description.trim();
-  const trimmedCat = category.trim();
-  const tags = parseTags(tagsRaw.trim());
-
-  const doc: PublishedDocument = {
-    path: trimmed,
-    ...(trimmedDesc ? { description: trimmedDesc } : {}),
-    ...(trimmedCat ? { category: trimmedCat } : {}),
-    ...(tags.length > 0 ? { tags } : {}),
-    ...buildPublishedDocumentStateField(stateChoice),
-  };
-  return doc;
 }

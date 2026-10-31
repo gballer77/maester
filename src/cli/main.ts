@@ -6,6 +6,15 @@ import { PromptCancelledError } from "../ui/prompts.js";
 import { createTheming } from "../ui/theme/index.js";
 import { readColumns } from "../ui/width.js";
 import { registerConnector } from "./commands/connector.js";
+import {
+  registerEdit,
+  runDocumentAdd,
+  runDocumentList,
+  runDocumentRemove,
+  runSourceAdd,
+  runSourceList,
+  runSourceRemove,
+} from "./commands/edit.js";
 import { registerInit, runInit } from "./commands/init.js";
 import { registerMcpServer } from "./commands/mcp-server.js";
 import { registerMcp } from "./commands/mcp.js";
@@ -78,6 +87,7 @@ function buildProgram(): Command {
     .allowExcessArguments(false);
 
   registerConnector(program, () => buildContext(extractFlags(program.opts())));
+  registerEdit(program, () => buildContext(extractFlags(program.opts())));
   registerInit(program, () => buildContext(extractFlags(program.opts())));
   registerMcp(program, () => buildContext(extractFlags(program.opts())));
   registerMcpServer(program, () => buildContext(extractFlags(program.opts())));
@@ -137,6 +147,18 @@ async function runNoArgs(ctx: CliContext): Promise<number> {
         return runInit(ctx);
       case "publish":
         return runPublish(ctx);
+      case "source-add":
+        return runSourceAdd(ctx);
+      case "source-remove":
+        return runSourceRemove(ctx);
+      case "source-list":
+        return runSourceList(ctx);
+      case "document-add":
+        return runDocumentAdd(ctx);
+      case "document-remove":
+        return runDocumentRemove(ctx);
+      case "document-list":
+        return runDocumentList(ctx);
       case "status":
         return runStatusCommand(ctx, []);
       case "exit":
