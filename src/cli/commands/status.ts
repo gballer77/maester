@@ -83,6 +83,7 @@ function buildJsonOutcome(outcome: StatusOutcome): Record<string, unknown> {
   if (outcome.mode !== undefined) base.mode = outcome.mode;
   if (outcome.filterMode !== undefined) base.filterMode = outcome.filterMode;
   if (outcome.sourcePath !== undefined) base.sourcePath = outcome.sourcePath;
+  if (outcome.submodules !== undefined) base.submodules = outcome.submodules;
   if (outcome.verdict === "up-to-date") {
     if (outcome.commitSha !== undefined) base.commitSha = outcome.commitSha;
     return base;
@@ -116,6 +117,9 @@ function renderHumanSummary(ctx: CliContext, result: StatusResult): void {
       case "failed":
         ctx.logger.error(`${outcome.name}: failed — ${redactUrl(outcome.error)}${mode}`);
         break;
+    }
+    for (const sub of outcome.submodules ?? []) {
+      ctx.logger.info(`  submodule ${sub.path} @ ${shortSha(sub.commitSha)}`);
     }
   }
   ctx.logger.blank();

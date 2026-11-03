@@ -12,6 +12,7 @@ import { defaultDestinationFor } from "../config/paths.js";
 import { AuthError, MaesterError, RefNotFoundError } from "../errors.js";
 import { type FilterMode, hasExplicitIncludes } from "../sources/filter-mode.js";
 import { type OverlapTargets, realOverlapTargets } from "../sources/local-path.js";
+import type { SubmoduleRef } from "../sources/submodules.js";
 import { findDanglingLinks } from "../sync/link.js";
 import {
   type MaterializationMode,
@@ -44,6 +45,8 @@ export type StatusOutcomeBase = {
   filterMode?: FilterMode;
   /** Path sources: the resolved absolute directory. */
   sourcePath?: string;
+  /** Git sources: submodules the last sync materialized, at their pinned commits. */
+  submodules?: readonly SubmoduleRef[];
 };
 
 export type StatusOutcome =
@@ -201,6 +204,7 @@ async function checkSource(
 function recordedBase(name: string, marker: ProvenanceMarker): StatusOutcomeBase {
   const base: StatusOutcomeBase = { name, kind: "git", mode: marker.mode };
   if (marker.filterMode) base.filterMode = marker.filterMode;
+  if (marker.kind === "git" && marker.submodules?.length) base.submodules = marker.submodules;
   return base;
 }
 

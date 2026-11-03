@@ -208,7 +208,7 @@ export async function runSourceList(ctx: CliContext): Promise<number> {
       ],
       rows: config.sources.map((s) => ({
         name: s.name,
-        location: s.url ?? s.path ?? "",
+        location: `${s.url ?? s.path ?? ""}${s.submodules === false ? " (submodules off)" : ""}`,
         ref: s.url !== undefined ? (s.ref ?? "default branch") : "—",
         auth: s.auth?.type ?? "none",
         destination: s.destination ?? `${baseDir}/${s.name} (default)`,

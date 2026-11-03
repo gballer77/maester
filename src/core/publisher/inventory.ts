@@ -9,6 +9,7 @@ import type { PublishedDocument } from "../../schemas/maester.js";
 import { loadCitadelConfig, loadMaesterConfig } from "../config/loader.js";
 import { defaultDestinationFor, maesterConfigPath } from "../config/paths.js";
 import { BUILTIN_EXCLUDES, filterWholeRepoFiles } from "../sources/excludes.js";
+import { type LocalSubmodule, localSubmodules } from "../sources/submodules.js";
 import { handlerFor } from "../state/format.js";
 import { matchSensitive } from "./sensitive.js";
 
@@ -29,6 +30,8 @@ export type InventoryFile = {
   inline: { state?: string; category?: string; tags?: string[] };
   /** The first manifest entry whose path matches this file. */
   coveredBy: string | null;
+  /** The (innermost) git submodule this file lives in, if any. */
+  submodule?: string;
 };
 
 export type InventoryReport = {
@@ -37,6 +40,8 @@ export type InventoryReport = {
   directories: { dir: string; docFiles: number; uncovered: number }[];
   files: InventoryFile[];
   sensitive: { path: string; reason: string }[];
+  /** Git submodules declared in the repository; uninitialized ones contribute no files. */
+  submodules: LocalSubmodule[];
   truncated: boolean;
 };
 
@@ -81,8 +86,12 @@ export async function runInventory(
     documents === undefined ? "none" : documents.length === 0 ? "whole-repository" : "listed";
   const excludes = [...BUILTIN_EXCLUDES, ...(await citadelDestinations(repoRoot))];
 
+  const submodules = await localSubmodules(repoRoot);
+  // Innermost first, so a file is attributed to the deepest submodule holding it.
+  const subPaths = submodules.map((s) => s.path).sort((a, b) => b.length - a.length);
+
   // Sensitive files are reported only in `sensitive`, never as candidates.
-  const candidates = (await listCandidates(repoRoot, excludes)).filter(
+  const candidates = (await listCandidates(repoRoot, excludes, submodules)).filter(
     (p) =>
       p !== "maester.yaml" &&
       matchSensitive(p) === undefined &&
@@ -116,6 +125,7 @@ export async function runInventory(
       kind: fileKind(path),
       inline,
       coveredBy: rules.find((r) => r.match(path))?.path ?? null,
+      ...submoduleOf(path, subPaths),
     });
   }
 
@@ -125,6 +135,7 @@ export async function runInventory(
     directories: rollup(files),
     files: files.slice(0, limit),
     sensitive: await findSensitive(repoRoot, excludes),
+    submodules,
     truncated: files.length > limit,
   };
 }
@@ -153,18 +164,33 @@ async function citadelDestinations(repoRoot: string): Promise<string[]> {
   }
 }
 
+function submoduleOf(path: string, subPaths: readonly string[]): { submodule?: string } {
+  const sub = subPaths.find((p) => path.startsWith(`${p}/`));
+  return sub ? { submodule: sub } : {};
+}
+
 /**
  * Tracked plus untracked-but-not-ignored files in a git work tree (honours
- * `.gitignore`); a filesystem walk elsewhere.
+ * `.gitignore`); a filesystem walk elsewhere. `git ls-files` lists a
+ * submodule as a single gitlink entry, so each initialized submodule is
+ * listed from inside and the gitlink entries are dropped.
  */
-async function listCandidates(repoRoot: string, excludes: readonly string[]): Promise<string[]> {
+async function listCandidates(
+  repoRoot: string,
+  excludes: readonly string[],
+  submodules: readonly LocalSubmodule[],
+): Promise<string[]> {
   try {
-    const { stdout } = await execFile(
-      "git",
-      ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-      { cwd: repoRoot, maxBuffer: 256 * 1024 * 1024 },
-    );
-    return [...new Set(stdout.split("\0").filter((p) => p.length > 0))].sort();
+    const all = new Set(await gitLsFiles(repoRoot));
+    for (const sub of submodules) {
+      all.delete(sub.path);
+      if (!sub.initialized) continue;
+      for (const file of await gitLsFiles(resolve(repoRoot, sub.path)).catch(() => [])) {
+        all.add(`${sub.path}/${file}`);
+      }
+    }
+    for (const sub of submodules) all.delete(sub.path);
+    return [...all].sort();
   } catch {
     return (
       await globby(["**"], {
@@ -177,6 +203,15 @@ async function listCandidates(repoRoot: string, excludes: readonly string[]): Pr
       })
     ).sort();
   }
+}
+
+async function gitLsFiles(cwd: string): Promise<string[]> {
+  const { stdout } = await execFile(
+    "git",
+    ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+    { cwd, maxBuffer: 256 * 1024 * 1024 },
+  );
+  return stdout.split("\0").filter((p) => p.length > 0);
 }
 
 function readInline(path: string, buf: Buffer): InventoryFile["inline"] {

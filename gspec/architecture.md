@@ -415,6 +415,7 @@ Cross-array invariants (enforced by a Zod `.superRefine` on the parsed document,
 | `ref` | string | Git sources only; rejected on path sources with "`ref` applies only to git (`url`) sources". When absent, the remote's default branch is used at sync time. |
 | `excludes` | string[] | Optional. When present, length ≥ 1. Same shape validation as an `includes` path (bare strings only — no object form). Applied only in whole-repository mode; any other mode emits an `excludes-ignored` warning and continues ([Whole-Repository Sources](features/whole-repository-sources.md) P1). |
 | `includes` | `(string \| IncludeEntry)[]` | Optional. When present, length ≥ 1. Each entry is either a bare string (the path/glob) or an object `{ path: string; state?: "draft" \| "canon"; category?: slug; tags?: slug[] }` (`category` / `tags` per [Document Category and Tags](features/document-category-and-tags.md), §6.15). The path uses the same shape validation as `PublishedDocument.path` (no leading `/`, no `..`, no whitespace-only entries; `globby` syntax). The optional `state` is the includes-driven rule-level state applied to files matched by that entry — see [Document State Tagging](features/document-state-tagging.md) and §6.8. When `includes` is set, the citadel owns the filter set and the remote `maester.yaml` is not consulted; when unset, sync looks for a `maester.yaml` manifest on the remote and uses its globs. |
+| `submodules` | boolean | Optional; absent means enabled. `false` opts the source out of git submodules: git sources fetch none, path sources drop files under submodule paths, and sync warns (`submodules-disabled`) when the filter set reached any ([Git Submodule Sources](features/git-submodule-sources.md), §6.7 *Submodules*). |
 | `auth` | `AuthRef` | Git sources only; rejected on path sources with "`auth` applies only to git (`url`) sources". Optional; defaults to `{ type: "none" }`. |
 | `destination` | string | Optional. Repo-relative path. Validation: no leading `/`, no `..` segments, no symlinks. Default: `<baseDir>/<name>/` (where `baseDir` defaults to `citadel` — see `CitadelConfig.baseDir`). |
 | `description` | string | Optional. Free text; surfaced in `--verbose` output alongside the entry name. |
@@ -422,7 +423,7 @@ Cross-array invariants (enforced by a Zod `.superRefine` on the parsed document,
 
 Implementation note: the schema stays a single `.strict()` object with `url` and `path` both optional, and the pairing rules live in the citadel `.superRefine` — a `z.discriminatedUnion` would need a discriminator key the user never writes and would produce worse errors for the "both / neither" case.
 
-Introduced by: [Citadel Initialization](features/citadel-initialization.md); `path` / `mode` by [Local Maesters](features/local-maesters.md); `excludes` by [Whole-Repository Sources](features/whole-repository-sources.md). Consumed by: [Maester Sync](features/maester-sync.md) via `src/core/sources/fetcher.ts`.
+Introduced by: [Citadel Initialization](features/citadel-initialization.md); `path` / `mode` by [Local Maesters](features/local-maesters.md); `excludes` by [Whole-Repository Sources](features/whole-repository-sources.md). `submodules` by [Git Submodule Sources](features/git-submodule-sources.md). Consumed by: [Maester Sync](features/maester-sync.md) via `src/core/sources/fetcher.ts`.
 
 #### AuthRef
 
@@ -461,6 +462,7 @@ A v2 discriminated union on `kind`. Fields shared by both kinds:
 | `sourceUrl` | string | Redacted (no embedded token). |
 | `ref` | string | The ref the source was resolved to. |
 | `commitSha` | string | Full 40-char SHA. |
+| `submodules` | `{ path, commitSha }[]` | Submodules materialized into the destination (parent-relative path, pinned commit), in walk order. Omitted when none. Compared for `unchanged`; absent ≡ `[]` ([Git Submodule Sources](features/git-submodule-sources.md)). |
 
 `kind: "path"` adds ([Local Maesters](features/local-maesters.md) P0):
 
@@ -1008,6 +1010,31 @@ It would be technically straightforward to let `citadel.yaml` always override th
 The includes-driven mode deliberately inverts this contract: the source has no manifest and no opinion about what it publishes, so the citadel **must** declare what to pull — `includes` is authoritative and `maester.yaml` (if any) is ignored. The trade-off is upkeep: when the source repo restructures, the citadel's `includes` may need to be updated, and the P1 zero-files-matched warning is the architecture's tripwire for that case. That upkeep cost is intrinsic to consuming a source that did not opt into the publish-surface contract; it is not a defect, and there is no design lever that reduces it without giving up the contract itself.
 
 Whole-repository mode is the fallback when **neither side** declares a surface. Citadel-side `excludes` only narrow it; they are ignored (with a warning) in the other two modes, so they can never be layered on top of a remote's declared manifest.
+
+#### Submodules
+
+[Git Submodule Sources](features/git-submodule-sources.md). `src/core/sources/submodules.ts` runs after Stage 2 in every filter mode (skipped with `source.submodules: false`):
+
+```mermaid
+flowchart TD
+  A[Stage 2 checkout of the parent] --> B[git ls-tree: gitlinks at HEAD<br/>git config --blob HEAD:.gitmodules: urls]
+  B --> C{needed?}
+  C -- "includes / manifest: a pattern reaches the path" --> D
+  C -- "whole-repository: not under an exclude" --> D
+  C -- no --> X[skip]
+  D[resolve relative url against the parent url<br/>token only for https on the source's host] --> E[nested repo at the gitlink path:<br/>sparse set + fetch --depth=1 --filter=blob:none origin SHA<br/>fallback: full fetch]
+  E -- ok --> F[record path + pinned SHA; recurse into its gitlinks, depth ≤ 8]
+  E -- error --> W[submodule-unreachable warning; remove the half-made dir]
+  F --> P[prune nested checkouts from earlier runs not kept<br/>record in .git/maester-submodules.json]
+```
+
+- **Reach** (`submoduleReached`) walks a pattern's segments down the submodule path with picomatch, using manifest-resolution glob semantics: `services/*/docs/**` and `**/*.md` reach `services/billing`; `*.md`, `docs/**` and `services/*` don't. A literal directory pattern reaches everything under it.
+- **Sparse patterns inside the submodule** are the reaching patterns re-rooted below it (`/docs/**`). A pattern that crosses `**` above the submodule falls back to a full checkout minus the built-in negations.
+- **Parent governs.** Only the parent's `maester.yaml` (or the citadel's `includes`) is ever read; a submodule's own manifest is inert.
+- **Nested checkouts live at their gitlink paths** inside the parent cache. The parent's `sparse-checkout set` and `reset --hard` leave a populated nested repository alone, so link targets and copy roots are unchanged.
+- **Files.** Whole-repository mode lists the working tree as before; the nested files simply appear. In includes and manifest mode with ≥ 1 submodule, the fetcher returns an explicit `files` list: parent files as sparse-checked-out, plus submodule files matching the patterns. Copy staging then copies exactly that list, which also keeps nested `.git` directories out of the destination.
+- **Change detection.** A re-pin moves the parent commit. The marker's `submodules` list additionally catches a previously unreachable submodule now succeeding, and toggling the opt-out.
+- **Path sources** never run git commands that change the tree. Initialized submodules are plain files; a reached uninitialized one earns `submodule-uninitialized`. The submodule's `.git` *file* is never listed.
 
 ### 6.8 Document State Tagging
 

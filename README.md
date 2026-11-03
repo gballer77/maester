@@ -134,6 +134,26 @@ Narrow it further with `excludes` on the source:
 
 `excludes` only applies in whole-repository mode; on an includes- or manifest-driven source sync warns that it was ignored.
 
+### Repositories with git submodules
+
+One source covers a repository *and* its submodules. Point `includes` or `maester.yaml` entries at paths inside a submodule as if it were an ordinary directory:
+
+```yaml
+# maester.yaml in an umbrella repo whose services/* are submodules
+schemaVersion: 1
+documents:
+  - path: docs/**
+  - path: services/*/docs/**
+```
+
+- **Only what's needed is fetched.** Sync fetches a submodule only when a pattern reaches into it, at the commit the parent pins, recursively. Whole-repository sources fetch every submodule outside the built-in excludes (`vendor/`, `node_modules/`, …).
+- **The parent governs.** A submodule's own `maester.yaml` is ignored, so there's no need for a manifest per submodule.
+- **Auth:** private submodules on the same host as the source reuse its `auth` token. Credentials are never sent to another host.
+- **Failures don't sink the source.** An unreachable submodule is skipped with a warning naming its path; everything else still syncs.
+- **Opt out** per source with `submodules: false`.
+- **Local `path` sources** read submodules as they are on disk. Uninitialized ones get a warning suggesting `git submodule update --init`; maester never changes your checkout.
+- `maester status` lists each fetched submodule's pinned commit.
+
 ## Local directories as sources
 
 A source can point at a directory on this machine with `path:` instead of `url:`. There is no git, cache, or network involved. Use it for sibling checkouts, notes folders, or anything you are editing locally.

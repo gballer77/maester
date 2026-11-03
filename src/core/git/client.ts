@@ -201,7 +201,7 @@ function refNotFoundFromError(err: unknown): boolean {
   );
 }
 
-function injectToken(url: string, token: string): string {
+export function injectToken(url: string, token: string): string {
   if (!url.startsWith("https://")) return url;
   const after = url.slice("https://".length);
   return `https://x-access-token:${token}@${after}`;

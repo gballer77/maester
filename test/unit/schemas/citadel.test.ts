@@ -34,6 +34,12 @@ describe("SourceSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts submodules: false and rejects non-boolean values", () => {
+    const base = { name: "platform", url: "https://x.git" };
+    expect(SourceSchema.safeParse({ ...base, submodules: false }).success).toBe(true);
+    expect(SourceSchema.safeParse({ ...base, submodules: "no" }).success).toBe(false);
+  });
+
   it("rejects an empty excludes list", () => {
     const result = SourceSchema.safeParse({ name: "handbook", url: "https://x.git", excludes: [] });
     expect(result.success).toBe(false);

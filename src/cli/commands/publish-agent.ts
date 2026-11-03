@@ -281,6 +281,12 @@ export async function runInventoryCommand(
       .join(", ") || "(none)";
   process.stdout.write(`Categories in use: ${vocab(report.vocabulary.categories)}\n`);
   process.stdout.write(`Tags in use: ${vocab(report.vocabulary.tags)}\n`);
+  const uninitialized = report.submodules.filter((s) => !s.initialized).map((s) => s.path);
+  if (uninitialized.length > 0) {
+    process.stdout.write(
+      `Uninitialized submodules (not listed; run \`git submodule update --init\`): ${uninitialized.join(", ")}\n`,
+    );
+  }
   if (report.sensitive.length > 0) {
     process.stdout.write("Likely sensitive — never publish:\n");
     for (const s of report.sensitive) process.stdout.write(`  ! ${s.path} (${s.reason})\n`);
@@ -339,6 +345,9 @@ function formatPreview(report: PreviewReport): string {
     lines.push(
       `${entry.path} — ${entry.files.length} file${entry.files.length === 1 ? "" : "s"}${flags}`,
     );
+    for (const sub of entry.submodules ?? []) {
+      lines.push(`  inside submodule \`${sub}\`, not initialized — files can't be resolved here`);
+    }
     for (const f of entry.files.slice(0, PREVIEW_FILES_PER_ENTRY)) {
       const meta = [
         f.state === "untagged" ? "untagged" : `${f.state} (${f.stateSource})`,

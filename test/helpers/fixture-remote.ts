@@ -33,6 +33,10 @@ export class FixtureRemote {
     await rm(this.cleanupRoot, { recursive: true, force: true });
   }
 
+  get workTree(): string {
+    return resolve(this.cleanupRoot, "work");
+  }
+
   /** Commit file writes and removals in the fixture's work tree and push them. */
   async pushCommit(changes: { files?: FixtureRemoteFile[]; remove?: string[] }): Promise<void> {
     const workTree = resolve(this.cleanupRoot, "work");
@@ -87,4 +91,58 @@ export async function createBareRemote(options: FixtureRemoteOptions): Promise<F
   });
 
   return new FixtureRemote(bareRepo, root);
+}
+
+export type FixtureSubmodule = { path: string; remote: FixtureRemote };
+
+/**
+ * A bare remote whose tree contains git submodules pointing at other fixture
+ * remotes. `file` transport is blocked for submodules by default since git
+ * 2.38.1, so the fixture opts in for its own `submodule add`.
+ */
+export async function createBareRemoteWithSubmodules(options: {
+  files: FixtureRemoteFile[];
+  submodules: FixtureSubmodule[];
+}): Promise<FixtureRemote> {
+  const remote = await createBareRemote({ files: options.files });
+  const workTree = remote.workTree;
+  for (const sub of options.submodules) {
+    await execFile(
+      "git",
+      [
+        "-C",
+        workTree,
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        "--quiet",
+        sub.remote.bareRepoUrl,
+        sub.path,
+      ],
+      { env: ENV_OVERRIDE },
+    );
+  }
+  await execFile("git", ["-C", workTree, "commit", "-m", "add submodules", "--quiet"], {
+    env: ENV_OVERRIDE,
+  });
+  await execFile("git", ["-C", workTree, "push", "origin", "HEAD", "--quiet"], {
+    env: ENV_OVERRIDE,
+  });
+  return remote;
+}
+
+/** Re-pin a submodule in an umbrella fixture to its remote's latest commit and push. */
+export async function bumpSubmodule(umbrella: FixtureRemote, path: string): Promise<void> {
+  const subDir = resolve(umbrella.workTree, path);
+  await execFile("git", ["-C", subDir, "pull", "--quiet", "origin", "HEAD"], {
+    env: ENV_OVERRIDE,
+  });
+  await execFile("git", ["-C", umbrella.workTree, "add", path], { env: ENV_OVERRIDE });
+  await execFile("git", ["-C", umbrella.workTree, "commit", "-m", "bump", "--quiet"], {
+    env: ENV_OVERRIDE,
+  });
+  await execFile("git", ["-C", umbrella.workTree, "push", "origin", "HEAD", "--quiet"], {
+    env: ENV_OVERRIDE,
+  });
 }
