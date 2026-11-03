@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import type { FilterMode } from "../sources/filter-mode.js";
+import type { SubmoduleRef } from "../sources/submodules.js";
 
 export const PROVENANCE_FILENAME = ".maester-source.json";
 export const PROVENANCE_MARKER_VERSION = 2;
@@ -29,6 +30,8 @@ export type GitProvenanceMarker = MarkerCommon & {
   sourceUrl: string;
   ref: string | undefined;
   commitSha: string;
+  /** Submodules materialized into this destination; absent means none. */
+  submodules?: readonly SubmoduleRef[];
 };
 
 export type PathProvenanceMarker = MarkerCommon & {
@@ -90,6 +93,7 @@ export async function writeProvenanceMarker(
           sourceUrl: input.sourceUrl,
           ref: input.ref,
           commitSha: input.commitSha,
+          ...(input.submodules?.length ? { submodules: input.submodules } : {}),
           ...tail,
         };
   await writeFile(path, `${JSON.stringify(body, null, 2)}\n`, "utf8");
@@ -143,10 +147,36 @@ export async function readProvenanceMarker(
       sourceUrl: parsed.sourceUrl,
       ref: typeof parsed.ref === "string" ? parsed.ref : undefined,
       commitSha: parsed.commitSha,
+      ...(Array.isArray(parsed.submodules)
+        ? { submodules: parseSubmoduleRefs(parsed.submodules) }
+        : {}),
     };
   } catch {
     return undefined;
   }
+}
+
+function parseSubmoduleRefs(raw: unknown[]): SubmoduleRef[] {
+  return raw.filter(
+    (r): r is SubmoduleRef =>
+      typeof r === "object" &&
+      r !== null &&
+      typeof (r as SubmoduleRef).path === "string" &&
+      typeof (r as SubmoduleRef).commitSha === "string",
+  );
+}
+
+/** Same submodules at the same commits; absent and empty are equivalent. */
+export function submodulesMatch(
+  a: readonly SubmoduleRef[] | undefined,
+  b: readonly SubmoduleRef[] | undefined,
+): boolean {
+  const x = a ?? [];
+  const y = b ?? [];
+  return (
+    x.length === y.length &&
+    x.every((s, i) => s.path === y[i]?.path && s.commitSha === y[i]?.commitSha)
+  );
 }
 
 function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T | undefined {

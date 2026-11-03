@@ -106,6 +106,7 @@ function buildJsonOutcome(outcome: SyncOutcome, verbose: boolean): Record<string
   if (outcome.fileCount !== undefined) base.fileCount = outcome.fileCount;
   if (outcome.skipped !== undefined) base.skipped = outcome.skipped;
   if (outcome.gitignoreEntry !== undefined) base.gitignoreEntry = outcome.gitignoreEntry;
+  if (outcome.submodules !== undefined) base.submodules = outcome.submodules;
   if (outcome.warnings.length > 0) {
     base.warnings = outcome.warnings.map(serializeWarning);
   }
@@ -151,6 +152,7 @@ function renderHumanSummary(ctx: CliContext, result: SyncResult): void {
     if (outcome.status !== "failed") {
       renderWholeRepoLines(ctx, outcome);
       renderClassificationLine(ctx, outcome);
+      renderSubmoduleLine(ctx, outcome);
     }
     for (const warning of outcome.warnings) {
       ctx.logger.warning(`  ${formatWarning(warning)}`);
@@ -165,6 +167,7 @@ function renderHumanSummary(ctx: CliContext, result: SyncResult): void {
     }
   }
   ctx.logger.blank();
+  renderUnreachableSubmodules(ctx, result);
   if (result.failed > 0) {
     ctx.logger.error(`${result.failed} source(s) failed.`);
     return;
@@ -206,6 +209,25 @@ function renderWholeRepoLines(ctx: CliContext, outcome: SyncOutcome): void {
   }
 }
 
+function renderSubmoduleLine(ctx: CliContext, outcome: SyncOutcome): void {
+  const fetched = outcome.submodules?.length ?? 0;
+  const skipped = outcome.warnings.filter((w) => w.type === "submodule-unreachable").length;
+  if (fetched === 0 && skipped === 0) return;
+  const skippedPart = skipped > 0 ? ` · ${skipped} skipped` : "";
+  ctx.logger.info(`  submodules: ${fetched} fetched${skippedPart}`);
+}
+
+/** Repeated after the per-source lines so a skipped submodule isn't lost in scrollback. */
+function renderUnreachableSubmodules(ctx: CliContext, result: SyncResult): void {
+  const skipped = result.outcomes.flatMap((o) =>
+    o.warnings.flatMap((w) => (w.type === "submodule-unreachable" ? [`${o.name}:${w.path}`] : [])),
+  );
+  if (skipped.length === 0) return;
+  ctx.logger.warning(
+    `${skipped.length} submodule(s) could not be fetched and were skipped: ${skipped.join(", ")}`,
+  );
+}
+
 function formatWarning(warning: SyncWarning): string {
   switch (warning.type) {
     case "no-matches":
@@ -216,6 +238,12 @@ function formatWarning(warning: SyncWarning): string {
       return warning.transition === "copy-to-link"
         ? `${warning.destination} switched from copied to linked and is now gitignored — previously committed copies stay in git history; run \`git rm -r --cached ${warning.destination}\` to stop tracking them`
         : `${warning.destination} switched from linked to copied but is still gitignored — remove its .gitignore entry to commit the copies`;
+    case "submodule-unreachable":
+      return `submodule ${warning.path} skipped — ${redactUrl(warning.reason)}`;
+    case "submodules-disabled":
+      return `submodules disabled for this source — skipped content under ${warning.paths.join(", ")}`;
+    case "submodule-uninitialized":
+      return `submodule ${warning.path} is not initialized — run \`git submodule update --init ${warning.path}\` in the source directory`;
   }
 }
 

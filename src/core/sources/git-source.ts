@@ -23,13 +23,25 @@ import {
   readManifestProbe,
   resolveFilterMode,
 } from "./filter-mode.js";
+import {
+  type SubmoduleFilter,
+  type SubmoduleRef,
+  type SubmoduleWarning,
+  compileFileMatcher,
+  isUnderAny,
+  listGitlinks,
+  pruneStaleSubmodules,
+  submoduleReached,
+  syncSubmodules,
+} from "./submodules.js";
 
 /** Sparse pattern set for whole-repository mode: everything, minus noisy dirs. */
 const WHOLE_REPO_SPARSE_PATTERNS = ["/*", ...BUILTIN_SPARSE_NEGATIONS];
 
 export type FetchWarning =
   | { type: "no-matches"; name: string; includes: readonly string[] }
-  | { type: "excludes-ignored"; name: string; filterMode: "includes" | "manifest" };
+  | { type: "excludes-ignored"; name: string; filterMode: "includes" | "manifest" }
+  | SubmoduleWarning;
 
 export type FetchedTree = {
   kind: "git";
@@ -39,12 +51,17 @@ export type FetchedTree = {
   filterMode: FilterMode;
   filterSet: readonly string[];
   rules: readonly RuleEntry[];
-  /** Whole-repository mode: the authoritative, filtered, sorted file list. */
+  /**
+   * The authoritative, sorted file list: always in whole-repository mode, and
+   * in the other modes when submodule content had to be filtered in.
+   */
   files?: readonly string[];
   /** Whole-repository mode: built-in excludes followed by the source's own. */
   excludes?: readonly string[];
   wholeRepoReason?: WholeRepoReason;
   skipped?: SkippedCounts;
+  /** Submodules materialized for this source, at the commits the parent pins. */
+  submodules?: readonly SubmoduleRef[];
   warnings: FetchWarning[];
 };
 
@@ -72,6 +89,12 @@ export async function fetchGitSource(entry: GitSource, ctx: FetchContext): Promi
     case "whole-repository": {
       await setSparsePatterns(ctx.cacheDir, WHOLE_REPO_SPARSE_PATTERNS);
       const commitSha = await checkoutRef(ctx.cacheDir, entry.ref);
+      const submodules = await resolveSubmodules(
+        entry,
+        ctx,
+        { kind: "all", excludes: resolution.excludes },
+        warnings,
+      );
       const candidates = await listWorkingTreeFiles(ctx.cacheDir);
       const { files, skipped } = await filterWholeRepoFiles(
         ctx.cacheDir,
@@ -90,6 +113,7 @@ export async function fetchGitSource(entry: GitSource, ctx: FetchContext): Promi
         excludes: resolution.excludes,
         wholeRepoReason: resolution.reason,
         skipped,
+        ...(submodules.length > 0 ? { submodules } : {}),
         warnings,
       };
     }
@@ -99,9 +123,19 @@ export async function fetchGitSource(entry: GitSource, ctx: FetchContext): Promi
       }
       await setSparsePatterns(ctx.cacheDir, resolution.patterns);
       const commitSha = await checkoutRef(ctx.cacheDir, entry.ref);
+      const submodules = await resolveSubmodules(
+        entry,
+        ctx,
+        { kind: "patterns", patterns: resolution.patterns },
+        warnings,
+      );
+      const files =
+        submodules.length > 0
+          ? await filesWithSubmodules(ctx.cacheDir, resolution.patterns, submodules)
+          : undefined;
       if (resolution.mode === "includes") {
-        const materialized = await listWorkingTreeFiles(ctx.cacheDir);
-        if (materialized.length === 0) {
+        const count = (files ?? (await listWorkingTreeFiles(ctx.cacheDir))).length;
+        if (count === 0) {
           warnings.push({ type: "no-matches", name: entry.name, includes: resolution.patterns });
         }
       }
@@ -113,10 +147,62 @@ export async function fetchGitSource(entry: GitSource, ctx: FetchContext): Promi
         filterMode: resolution.mode,
         filterSet: resolution.patterns,
         rules: resolution.rules,
+        ...(files ? { files } : {}),
+        ...(submodules.length > 0 ? { submodules } : {}),
         warnings,
       };
     }
   }
+}
+
+/**
+ * Materialize the submodules this source needs (architecture §6.7
+ * Submodules). With `submodules: false` nothing is fetched, earlier nested
+ * checkouts are removed, and a warning names any submodule the filter reached.
+ */
+async function resolveSubmodules(
+  entry: GitSource,
+  ctx: FetchContext,
+  filter: SubmoduleFilter,
+  warnings: FetchWarning[],
+): Promise<SubmoduleRef[]> {
+  if (entry.submodules === false) {
+    await pruneStaleSubmodules(ctx.cacheDir, []);
+    const links = await listGitlinks(ctx.cacheDir);
+    const reached = links
+      .map((l) => l.path)
+      .filter((p) => filter.kind === "all" || submoduleReached(p, filter.patterns));
+    if (reached.length > 0) {
+      warnings.push({ type: "submodules-disabled", name: entry.name, paths: reached });
+    }
+    return [];
+  }
+  const result = await syncSubmodules({
+    name: entry.name,
+    root: ctx.cacheDir,
+    sourceUrl: entry.url,
+    token: ctx.tokenForUrl,
+    filter,
+  });
+  warnings.push(...result.warnings);
+  return result.submodules;
+}
+
+/**
+ * Parent files exactly as the sparse checkout materialized them, plus the
+ * submodule files the filter patterns select. Submodule checkouts may be
+ * wider than the patterns (a full checkout when a pattern can't be re-rooted),
+ * so they are filtered with manifest-resolution glob semantics.
+ */
+async function filesWithSubmodules(
+  cacheDir: string,
+  patterns: readonly string[],
+  submodules: readonly SubmoduleRef[],
+): Promise<string[]> {
+  const subPaths = submodules.map((s) => s.path);
+  const matches = compileFileMatcher(patterns);
+  const all = await listWorkingTreeFiles(cacheDir);
+  return all.filter((file) => !isUnderAny(file, subPaths) || matches(file));
 }
 
 /**

@@ -18,6 +18,7 @@ import { type FetchWarning, type ResolvedTree, fetchSource } from "../sources/fe
 import type { FilterMode, WholeRepoReason } from "../sources/filter-mode.js";
 import { type OverlapTargets, realOverlapTargets } from "../sources/local-path.js";
 import { resolveSourceMode } from "../sources/source-mode.js";
+import type { SubmoduleRef } from "../sources/submodules.js";
 import {
   type CategoryBreakdown,
   type StateApplyDetail,
@@ -34,6 +35,7 @@ import {
   type ProvenanceMarkerInput,
   filterSetMatches,
   readProvenanceMarker,
+  submodulesMatch,
 } from "./provenance.js";
 import { stageDestination } from "./stage.js";
 
@@ -68,6 +70,8 @@ export type SyncOutcome = {
   /** Link mode: number of files linked. */
   fileCount?: number;
   skipped?: SkippedCounts;
+  /** Git sources: submodules materialized, at the commits the parent pins. */
+  submodules?: readonly SubmoduleRef[];
   /** The `.gitignore` line this run added, if any. */
   gitignoreEntry?: string;
   warnings: SyncWarning[];
@@ -277,8 +281,10 @@ function baseOutcome(
     filterMode: tree.filterMode,
     warnings: [...tree.warnings],
   };
-  if (tree.kind === "git") outcome.commitSha = tree.commitSha;
-  else outcome.sourcePath = tree.rootDir;
+  if (tree.kind === "git") {
+    outcome.commitSha = tree.commitSha;
+    if (tree.submodules) outcome.submodules = tree.submodules;
+  } else outcome.sourcePath = tree.rootDir;
   if (tree.wholeRepoReason) outcome.wholeRepoReason = tree.wholeRepoReason;
   if (tree.skipped) outcome.skipped = tree.skipped;
   if (tree.files) outcome.fileCount = tree.files.length;
@@ -300,7 +306,7 @@ async function isUnchanged(
   if (!marker || !existsSync(destination)) return false;
   const sameIdentity =
     marker.kind === "git" && tree.kind === "git"
-      ? marker.commitSha === tree.commitSha
+      ? marker.commitSha === tree.commitSha && submodulesMatch(marker.submodules, tree.submodules)
       : marker.kind === "path" && tree.kind === "path"
         ? marker.sourcePath === tree.sourcePath && marker.fingerprint === tree.fingerprint
         : false;
@@ -325,9 +331,10 @@ async function stageCopy(
 ): Promise<Partial<SyncOutcome>> {
   const stageResult = await stageDestination<StateApplyResult>({
     cacheDir: contentRoot(tree),
-    // A git cache is already narrowed by sparse checkout; a path source's
-    // directory is not, so only its resolved files are copied.
-    ...(tree.kind === "path" ? { files: tree.files } : {}),
+    // A git cache is already narrowed by sparse checkout unless submodule
+    // content had to be filtered in; a path source's directory never is. An
+    // explicit file list is copied exactly.
+    ...(tree.files ? { files: tree.files } : {}),
     destination,
     marker: markerInput(source, tree, "copy"),
     beforePromote: (stagedDir) => applyInlineMetadata(stagedDir, tree.rules),
@@ -372,6 +379,7 @@ function markerInput(
     sourceUrl: source.url ?? "",
     ref: source.ref,
     commitSha: tree.commitSha,
+    ...(tree.submodules ? { submodules: tree.submodules } : {}),
   };
 }
 

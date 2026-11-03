@@ -112,6 +112,9 @@ export const SourceSchema = z
       .array(IncludesPathSchema)
       .min(1, "excludes must declare at least one entry when present")
       .optional(),
+    // Git submodules the filter set reaches are fetched by default; `false`
+    // opts out (path sources then skip submodule content).
+    submodules: z.boolean().optional(),
     auth: AuthRefSchema.optional(),
     destination: z
       .string()

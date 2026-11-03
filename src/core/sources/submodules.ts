@@ -322,6 +322,8 @@ async function walk(
       });
     } catch (err) {
       unreachable(gitErrorSummary(err));
+      // A half-initialized nested repository must not leak into a copy of the cache.
+      await rm(dir, { recursive: true, force: true });
       continue;
     }
     result.submodules.push({ path, commitSha: link.sha });
