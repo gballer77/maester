@@ -53,31 +53,31 @@ spec-version: v1
 
 ## 4. Capabilities
 
-- [ ] **P0**: Sync fetches the submodules a remote source's filter set reaches into
+- [x] **P0**: Sync fetches the submodules a remote source's filter set reaches into
   - A manifest document or `includes` glob that matches a path inside a submodule → that submodule is fetched at the commit the parent pins, and its matching files are surfaced in the source's destination at their parent-relative paths
   - Submodules no filter reaches into are not fetched
   - A repository with no submodules syncs exactly as before. Output, timing and on-disk results are unchanged.
-- [ ] **P0**: Nested submodules are followed at any depth
+- [x] **P0**: Nested submodules are followed at any depth
   - A filter that reaches a path inside a submodule of a submodule → both levels are fetched and the files surfaced
   - Cyclic or repeated submodule references don't cause unbounded fetching
-- [ ] **P0**: The parent's filter set governs submodule content
+- [x] **P0**: The parent's filter set governs submodule content
   - A submodule containing its own `maester.yaml` → that file is ignored for publish decisions. Only the parent manifest or citadel `includes` decide.
   - `excludes`, and the built-in default excludes, apply to files inside submodules exactly as to parent files
-- [ ] **P0**: Whole-repository sources include submodule content
+- [x] **P0**: Whole-repository sources include submodule content
   - A whole-repository source with submodules → every submodule (recursively) is fetched and its files surfaced, minus excludes
   - Submodule content is linked, not copied, just like the rest of a whole-repository source
-- [ ] **P0**: An unreachable submodule degrades to a warning, not a source failure
+- [x] **P0**: An unreachable submodule degrades to a warning, not a source failure
   - Submodule fetch fails (auth, missing commit, network) → the source still syncs everything else and reports a warning naming the submodule path and the reason
   - The run's exit code reflects the warning in the same way as other per-source warnings, not as a source failure
   - The warning appears in the final summary so it isn't lost in scrollback
-- [ ] **P0**: Submodules on the same host reuse the parent source's credentials
+- [x] **P0**: Submodules on the same host reuse the parent source's credentials
   - Private submodule on the same host as the parent, with parent auth configured → fetched successfully with no extra config
   - A submodule on a different host is attempted without the parent's credentials. Those credentials are never sent to another host.
-- [ ] **P1**: A citadel source can opt out with `submodules: false`
+- [x] **P1**: A citadel source can opt out with `submodules: false`
   - `submodules: false` → no submodule is fetched; submodule paths stay empty, and sync notes that matching paths were skipped because submodules are disabled
   - The field is optional, defaults to enabled, and is accepted by config validation and the config JSON schema
   - `maester list` / `maester list --json` shows the setting when it is not the default
-- [ ] **P1**: Change detection reacts to submodule changes
+- [x] **P1**: Change detection reacts to submodule changes
   - Parent re-pins a submodule to a new commit → next sync reports the source as updated and refreshes the affected files
   - Submodule added or removed in the parent → surfaced content is added or removed accordingly
   - No parent or submodule change → source reports unchanged and no files are rewritten
