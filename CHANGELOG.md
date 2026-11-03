@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Git submodules in one source.** Sync fetches the submodules a source's `includes`, manifest entries or whole-repository mode reach into, at the commits the parent pins, including nested ones. Same-host submodules reuse the source's credentials. An unreachable submodule is a warning, not a failed source. A submodule's own `maester.yaml` is ignored: the parent governs. Opt out per source with `submodules: false`.
+- **Submodule paths in `maester.yaml`.** `publish inventory` lists files inside initialized submodules (marked with `submodule`), and `publish preview` flags entries that reach an uninitialized one (`uninitialized-submodule`).
+- **`maester status` shows each fetched submodule's pinned commit,** and sync output counts fetched and skipped submodules.
+
+### Fixed
+- **A path source in whole-directory mode no longer lists an initialized submodule's `.git` file.**
+
 ## [0.6.1] - 2026-10-30
 
 ### Fixed

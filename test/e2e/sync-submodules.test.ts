@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { lstat, readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { runStatus } from "../../src/core/status/runner.js";
 import { PROVENANCE_FILENAME } from "../../src/core/sync/provenance.js";
 import { runSync } from "../../src/core/sync/runner.js";
 import type { CitadelConfig, Source } from "../../src/schemas/citadel.js";
@@ -90,6 +91,12 @@ describe("sync with git submodules", () => {
 
     const marker = JSON.parse(await readFile(resolve(dest, PROVENANCE_FILENAME), "utf8"));
     expect(marker.submodules).toEqual(outcome?.submodules);
+
+    const status = await runStatus(config({ url: platform.bareRepoUrl }), {
+      repoRoot: repo.path,
+    });
+    expect(status.outcomes[0]?.verdict).toBe("up-to-date");
+    expect(status.outcomes[0]?.submodules).toEqual(outcome?.submodules);
   }, 60_000);
 
   it("follows includes into nested submodules", async () => {

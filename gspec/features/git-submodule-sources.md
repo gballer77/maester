@@ -88,7 +88,7 @@ spec-version: v1
   - `publish inventory` lists candidate documents inside initialized submodules and marks which submodule each belongs to
   - `publish preview` and `publish apply` / `add` path validation accept paths inside submodules without "path does not resolve" warnings when the submodule is initialized
   - A path inside an uninitialized submodule produces a specific warning ("inside submodule `<path>`, not initialized") instead of the generic missing-path warning
-- [ ] **P2**: Status and sync output show submodule provenance
+- [x] **P2**: Status and sync output show submodule provenance
   - Sync output for a source that pulled submodules lists how many submodules were fetched, plus any that were skipped
   - `maester status` reports the pinned commit of each fetched submodule alongside the source's own commit
 
