@@ -8,6 +8,7 @@ import {
   validateDocumentPath,
   validateTags,
 } from "../../core/publish/validators.js";
+import { localSubmodules, submoduleReached } from "../../core/sources/submodules.js";
 import type { State } from "../../core/state/schema.js";
 import type { PublishedDocument } from "../../schemas/maester.js";
 import type { CliContext } from "../context.js";
@@ -44,6 +45,10 @@ export async function askDocumentState(
   });
 }
 
+function uninitializedSubmoduleMessage(path: string, submodule: string): string {
+  return `'${path}' is inside submodule \`${submodule}\`, which is not initialized here — run \`git submodule update --init ${submodule}\` to check it. Saving anyway.`;
+}
+
 export async function collectOneDocument(
   ctx: CliContext,
   repoRoot: string,
@@ -64,13 +69,21 @@ export async function collectOneDocument(
   });
   const trimmed = path.trim();
 
+  const blockedBy = (await localSubmodules(repoRoot)).find(
+    (s) => !s.initialized && submoduleReached(s.path, [trimmed]),
+  );
   if (isGlobPath(trimmed)) {
     const matches = await globby(trimmed, { cwd: repoRoot, dot: false, gitignore: false });
     ctx.prompts.log.info(`Glob matches ${matches.length} file(s) currently.`);
-  } else {
-    if (!existsSync(resolve(repoRoot, trimmed))) {
-      ctx.prompts.log.warning(`'${trimmed}' does not yet exist in this repo. Saving anyway.`);
+    if (matches.length === 0 && blockedBy) {
+      ctx.prompts.log.warning(uninitializedSubmoduleMessage(trimmed, blockedBy.path));
     }
+  } else if (!existsSync(resolve(repoRoot, trimmed))) {
+    ctx.prompts.log.warning(
+      blockedBy
+        ? uninitializedSubmoduleMessage(trimmed, blockedBy.path)
+        : `'${trimmed}' does not yet exist in this repo. Saving anyway.`,
+    );
   }
 
   const stateChoice = await askDocumentState(ctx, trimmed);

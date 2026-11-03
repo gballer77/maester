@@ -5,6 +5,7 @@ import type { PublishedDocument } from "../../schemas/maester.js";
 import { BUILTIN_EXCLUDES, filterWholeRepoFiles } from "../sources/excludes.js";
 import { toRuleEntry } from "../sources/filter-mode.js";
 import { resolveManifestFiles } from "../sources/local-source.js";
+import { localSubmodules, submoduleReached } from "../sources/submodules.js";
 import {
   type FieldSourceOfTruth,
   type MetadataWarning,
@@ -33,7 +34,7 @@ export type PreviewFile = {
   multiMatch?: string[];
 };
 
-export type PreviewEntryFlag = "empty-entry" | "redundant";
+export type PreviewEntryFlag = "empty-entry" | "redundant" | "uninitialized-submodule";
 
 export type PreviewEntry = {
   path: string;
@@ -41,8 +42,11 @@ export type PreviewEntry = {
   /**
    * `empty-entry`: matches no file. `redundant`: every file it matches is
    * already matched by an earlier entry — it publishes nothing extra.
+   * `uninitialized-submodule`: it reaches into a submodule that isn't checked
+   * out here, so its files can't be resolved locally (named in `submodules`).
    */
   flags: PreviewEntryFlag[];
+  submodules?: string[];
 };
 
 export type PreviewReport =
@@ -83,13 +87,26 @@ export async function runPreview(
     resolved.set(file, preview);
   }
 
+  const uninitialized = (await localSubmodules(repoRoot))
+    .filter((s) => !s.initialized)
+    .map((s) => s.path);
   const seen = new Set<string>();
   const entries: PreviewEntry[] = perEntry.map(({ path, files }) => {
     const flags: PreviewEntryFlag[] = [];
     if (files.length === 0) flags.push("empty-entry");
     else if (files.every((f) => seen.has(f))) flags.push("redundant");
     for (const f of files) seen.add(f);
-    return { path, files: files.map((f) => resolved.get(f) as PreviewFile), flags };
+    const entry: PreviewEntry = {
+      path,
+      files: files.map((f) => resolved.get(f) as PreviewFile),
+      flags,
+    };
+    const blocked = uninitialized.filter((sub) => submoduleReached(sub, [path]));
+    if (blocked.length > 0) {
+      flags.push("uninitialized-submodule");
+      entry.submodules = blocked;
+    }
+    return entry;
   });
 
   return { manifest: "listed", entries, totalFiles: matches.size, warnings };

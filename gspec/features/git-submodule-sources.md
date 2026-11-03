@@ -81,10 +81,10 @@ spec-version: v1
   - Parent re-pins a submodule to a new commit → next sync reports the source as updated and refreshes the affected files
   - Submodule added or removed in the parent → surfaced content is added or removed accordingly
   - No parent or submodule change → source reports unchanged and no files are rewritten
-- [ ] **P1**: Local `path` sources surface initialized submodule content and report uninitialized submodules
+- [x] **P1**: Local `path` sources surface initialized submodule content and report uninitialized submodules
   - A filter reaches into an initialized submodule in a local source → its files are surfaced (linked or copied per the source's mode)
   - A filter reaches into an uninitialized submodule → a warning names the path and suggests initializing it. Maester does not change the local checkout.
-- [ ] **P1**: Publisher tooling treats submodule paths as first-class
+- [x] **P1**: Publisher tooling treats submodule paths as first-class
   - `publish inventory` lists candidate documents inside initialized submodules and marks which submodule each belongs to
   - `publish preview` and `publish apply` / `add` path validation accept paths inside submodules without "path does not resolve" warnings when the submodule is initialized
   - A path inside an uninitialized submodule produces a specific warning ("inside submodule `<path>`, not initialized") instead of the generic missing-path warning

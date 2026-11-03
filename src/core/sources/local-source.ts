@@ -22,6 +22,7 @@ import {
   isRelativeDeclaration,
 } from "./local-path.js";
 import { resolveSourceMode } from "./source-mode.js";
+import { isUnderAny, localSubmodules, submoduleReached } from "./submodules.js";
 
 export type LocalFetchContext = {
   repoRoot: string;
@@ -89,7 +90,9 @@ export async function fetchLocalSource(
 
   if (resolution.mode === "whole-repository") {
     const candidates = await listWholeDirectory(real, resolution.excludes);
-    const { files, skipped } = await filterWholeRepoFiles(real, candidates, resolution.excludes);
+    const filtered = await filterWholeRepoFiles(real, candidates, resolution.excludes);
+    const { skipped } = filtered;
+    const files = await applySubmodulePolicy(entry, real, filtered.files, () => true, warnings);
     return {
       ...base,
       filterSet: ["**"],
@@ -106,7 +109,13 @@ export async function fetchLocalSource(
   if (entry.excludes && entry.excludes.length > 0) {
     warnings.push({ type: "excludes-ignored", name: entry.name, filterMode: resolution.mode });
   }
-  const files = await resolveManifestFiles(real, resolution.patterns);
+  const files = await applySubmodulePolicy(
+    entry,
+    real,
+    await resolveManifestFiles(real, resolution.patterns),
+    (path) => submoduleReached(path, resolution.patterns),
+    warnings,
+  );
   if (resolution.mode === "includes" && files.length === 0) {
     warnings.push({ type: "no-matches", name: entry.name, includes: resolution.patterns });
   }
@@ -118,6 +127,33 @@ export async function fetchLocalSource(
     fingerprint: await fingerprintTree(real, files, { content: mode === "copy" }),
     warnings,
   };
+}
+
+/**
+ * Submodules in a local working tree are read as they are on disk: an
+ * initialized one is plain files, an uninitialized one is an empty directory
+ * that earns a warning (sync never runs git commands that change the tree).
+ * With `submodules: false` files inside submodules are dropped.
+ */
+async function applySubmodulePolicy(
+  entry: PathSource,
+  root: string,
+  files: readonly string[],
+  reached: (path: string) => boolean,
+  warnings: FetchWarning[],
+): Promise<string[]> {
+  const submodules = (await localSubmodules(root)).filter((s) => reached(s.path));
+  if (entry.submodules === false) {
+    const paths = submodules.map((s) => s.path);
+    if (paths.length > 0) warnings.push({ type: "submodules-disabled", name: entry.name, paths });
+    return files.filter((f) => !isUnderAny(f, paths));
+  }
+  for (const sub of submodules) {
+    if (!sub.initialized) {
+      warnings.push({ type: "submodule-uninitialized", name: entry.name, path: sub.path });
+    }
+  }
+  return [...files];
 }
 
 /**
@@ -158,6 +194,9 @@ async function listWholeDirectory(root: string, excludes: readonly string[]): Pr
   });
   const files: string[] = [];
   for (const file of entries) {
+    // An initialized submodule's `.git` is a file pointing at the parent's
+    // git directory; the `**/.git/**` exclude only covers directories.
+    if (file === ".git" || file.endsWith("/.git")) continue;
     if (!(await lstat(resolve(root, file))).isSymbolicLink()) files.push(file);
   }
   return files.sort();

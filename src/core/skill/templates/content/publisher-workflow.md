@@ -58,6 +58,12 @@ architecture notes and ADRs, runbooks, guides, specs, API references,
 changelogs. Leave out generated files, vendored content, test fixtures and
 anything flagged sensitive.
 
+Files inside git submodules are ordinary candidates (inventory marks them
+with `submodule`): one entry such as `services/billing/docs/**` publishes
+them, and citadels fetch the submodule. Don't propose a separate manifest per
+submodule. Submodules listed with `initialized: false` contribute no files
+here; say so rather than guessing at their contents.
+
 **Refine mode** (`manifest` is `listed`): propose only changes, grouped as
 
 1. **Additions** — uncovered documents (`coveredBy: null`) worth publishing.
@@ -88,8 +94,9 @@ category / tags each file ends up with, preview the change set:
 echo '<change set>' | npx baller-maester publish preview --from - --json
 ```
 
-Mention any `empty-entry` (matches nothing) or `multiMatch` (a file matched
-by several entries) in the proposal.
+Mention any `empty-entry` (matches nothing), `uninitialized-submodule`
+(reaches into a submodule that isn't checked out) or `multiMatch` (a file
+matched by several entries) in the proposal.
 
 ## 4. Present the proposal
 
